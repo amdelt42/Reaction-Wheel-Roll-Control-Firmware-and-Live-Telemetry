@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS 
+        "main.c"
+        "components/spi/spi.c"
+        "components/blink/blink.c"
+        "components/twai/twai.c"
+        "components/imu/imu.c"
+        "statemachine/statemachine.c"
+    INCLUDE_DIRS 
+        "."
+        "components/spi"
+        "components/blink"
+        "components/twai"
+        "components/imu"
+        "statemachine"
+)
