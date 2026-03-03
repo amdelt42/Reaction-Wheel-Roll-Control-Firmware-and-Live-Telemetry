@@ -1,6 +1,7 @@
 #include "imu.h"
 
 static const char TAG[] = "IMU";
+static QueueHandle_t imu_int_queue = NULL;
 
 void initialize_imu(void){
     ESP_LOGI(TAG, "Initializing IMU");
@@ -23,7 +24,7 @@ void initialize_imu(void){
 
     // Configure CLKIN 
     ESP_LOGD(TAG, "Configuring CLKIN");
-    imu_write(REG_INTF_CONFIG5, 0x00);
+    imu_write(REG_INTF_CONFIG5, 0x00); // reset
     imu_set_bits(REG_INTF_CONFIG5, 1, 2, 0b10);  // CLKIN enable
     
     //imu_write(REG_INTF_CONFIG1, 0x51);
@@ -31,17 +32,30 @@ void initialize_imu(void){
 
     // Gyro config
     ESP_LOGD(TAG, "Configuring Gyro");
-    imu_write(REG_GYRO_CONFIG0, 0x06);
+    imu_write(REG_GYRO_CONFIG0, 0x06); // reset
     imu_set_bits(REG_GYRO_CONFIG0, 5, 3, 0b001);  // ±2000 dps
-    imu_set_bits(REG_GYRO_CONFIG0, 0, 4, 0b0110); // 1 kHz
+    imu_set_bits(REG_GYRO_CONFIG0, 0, 4, 0b1011); // 1 kHz
 
     // Power Config
     ESP_LOGD(TAG, "Configuring PWR");
-    imu_write(REG_PWR_MGMT0, 0x00);
+    imu_write(REG_PWR_MGMT0, 0x00); // reset
     imu_set_bits(REG_PWR_MGMT0, 2, 2, 0b11);     // Gyro ON
     vTaskDelay(pdMS_TO_TICKS(100));    
 
+    // INT config
+    ESP_LOGD(TAG, "Configuring INT");
+    imu_write(REG_INT_CONFIG, 0x00); // reset
+    imu_set_bits(REG_INT_CONFIG, 0, 3, 0b111); // push-pull, active high, latched
+
+    imu_write(REG_INT_SOURCE0, 0x10); // reset
+    imu_set_bits(REG_INT_SOURCE0, 3, 1, 0b1); // UI data ready interrupt routed to INT1 
+
     ESP_LOGI(TAG, "IMU configuration complete");
+
+    uint8_t dummy;
+    imu_read(REG_INT_STATUS, &dummy, 1); // Clear stale interrupts
+    imu_interrupt_init();
+    xTaskCreate(imu_task, "imu_task", 4096, NULL, 10, NULL);
 }
 
 esp_err_t imu_read(uint8_t start_reg, uint8_t *data, size_t len)
@@ -163,4 +177,46 @@ void imu_clkin_init(void)
         .hpoint = 0
     };
     ledc_channel_config(&channel);
+}
+void imu_interrupt_init(void)
+{
+    imu_int_queue = xQueueCreate(10, sizeof(uint32_t));
+
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_POSEDGE,   // active HIGH
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = (1ULL << IMU_INT_PIN),
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE
+    };
+    gpio_config(&io_conf);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(IMU_INT_PIN, imu_isr_handler, (void*) IMU_INT_PIN);
+}
+
+void imu_task(void *arg)
+{
+    uint32_t io_num;
+
+    while (1)
+    {
+        if (xQueueReceive(imu_int_queue, &io_num, portMAX_DELAY))
+        {
+            // Clear latched interrupt
+            uint8_t status;
+            imu_read(REG_INT_STATUS, &status, 1);
+
+            gyro_data_t gyro;
+            if (imu_read_gyro(&gyro) == ESP_OK)
+            {
+                //printf("GYRO [rad/s]: X=%.3f Y=%.3f Z=%.3f\n", gyro.x, gyro.y, gyro.z);
+            }
+        }
+    }
+}
+void imu_isr_handler(void* arg)
+{
+    uint32_t gpio_num = (uint32_t) arg;
+    xQueueSendFromISR(imu_int_queue, &gpio_num, NULL);
 }

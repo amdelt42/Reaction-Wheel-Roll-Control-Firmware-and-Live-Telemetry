@@ -2,6 +2,10 @@
 #include "driver/ledc.h"
 #include <driver/gpio.h>
 
+void imu_interrupt_init(void);
+void imu_task(void *arg);
+void imu_isr_handler(void* arg);
+
 typedef struct {
     float x;
     float y;

@@ -48,7 +48,7 @@ bool twai_rx_cb(twai_node_handle_t handle, const twai_rx_done_event_data_t *edat
         .buffer_len = sizeof(recv_buff),
     };
     if (ESP_OK == twai_node_receive_from_isr(handle, &rx_frame)) {
-        //print the recieved frame
+        //print the recieved frame  
         CANMessage msg;
         msg.CANMessageID = rx_frame.header.id;
         memcpy(msg.CANData, rx_frame.buffer, rx_frame.buffer_len);

@@ -13,13 +13,7 @@
 
 void app_main(void)
 {
-    #if BUILD_MODE == BUILD_DEBUG
-    esp_log_level_set("IMU", ESP_LOG_DEBUG);
-    #elif BUILD_MODE == BUILD_TEST
-        esp_log_level_set("IMU", ESP_LOG_INFO);
-    #else
-        esp_log_level_set("IMU", ESP_LOG_WARN);
-    #endif
+    esp_log_level_set("*", ESP_LOG_INFO);  
 
     initialize_blink();
 
@@ -31,7 +25,8 @@ void app_main(void)
     
     // loop
     while (1) {
-        imu_print_gyro_once();
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(portMAX_DELAY);
     }
 }
+
+
