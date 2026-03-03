@@ -11,30 +11,38 @@ void initialize_imu(void){
         return;
     }
 
-    ESP_LOGI(TAG, "WHO_AM_I = 0x%02X", whoami);
-
     if (whoami != 0x44) {
-        ESP_LOGE(TAG, "Unexpected WHO_AM_I, skipping IMU configuration");
+        ESP_LOGE(TAG, "Unexpected WHO_AM_I");
         return;
     }
 
-    ESP_LOGI(TAG, "WHO_AM_I correct, applying IMU config");
+    // Start CLKIN 
+    ESP_LOGD(TAG, "Initializing CLKIN PIN");
+    imu_clkin_init();
+    vTaskDelay(pdMS_TO_TICKS(50));
 
-    // --- Power Management ---
-    imu_write(REG_PWR_MGMT0, 0x00); // reset
-    imu_set_bits(REG_PWR_MGMT0, 2, 2, 0b11); // Gyro ON (low noise mode)
-    vTaskDelay(pdMS_TO_TICKS(100)); // required startup delay (45ms minimum)
+    // Configure CLKIN 
+    ESP_LOGD(TAG, "Configuring CLKIN");
+    imu_write(REG_INTF_CONFIG5, 0x00);
+    imu_set_bits(REG_INTF_CONFIG5, 1, 2, 0b10);  // CLKIN enable
+    
+    //imu_write(REG_INTF_CONFIG1, 0x51);
+    //imu_set_bits(REG_INTF_CONFIG1, 2, 1, 0b1);   // RTC required
 
-    // --- Gyro Config ---
-    imu_write(REG_GYRO_CONFIG0, 0x06); // reset reset
-    imu_set_bits(REG_GYRO_CONFIG0, 5, 3, 0b001); // ±2000 dps
+    // Gyro config
+    ESP_LOGD(TAG, "Configuring Gyro");
+    imu_write(REG_GYRO_CONFIG0, 0x06);
+    imu_set_bits(REG_GYRO_CONFIG0, 5, 3, 0b001);  // ±2000 dps
     imu_set_bits(REG_GYRO_CONFIG0, 0, 4, 0b0110); // 1 kHz
 
-    // --- Fsync Config ---
-    
-    
+    // Power Config
+    ESP_LOGD(TAG, "Configuring PWR");
+    imu_write(REG_PWR_MGMT0, 0x00);
+    imu_set_bits(REG_PWR_MGMT0, 2, 2, 0b11);     // Gyro ON
+    vTaskDelay(pdMS_TO_TICKS(100));    
+
     ESP_LOGI(TAG, "IMU configuration complete");
-} 
+}
 
 esp_err_t imu_read(uint8_t start_reg, uint8_t *data, size_t len)
 {
@@ -64,7 +72,7 @@ esp_err_t imu_read(uint8_t start_reg, uint8_t *data, size_t len)
 
     // Optional: log only for single-byte reads
     if (len == 1) {
-        ESP_LOGI(TAG, "Read 0x%02X from 0x%02X", data[0], start_reg);
+        ESP_LOGD(TAG, "Read 0x%02X from 0x%02X", data[0], start_reg);
     }
 
     return ESP_OK;
@@ -84,7 +92,7 @@ esp_err_t imu_write(uint8_t reg, uint8_t data)
         return ret;
     }
 
-    ESP_LOGI(TAG, "Transmitted 0x%02X to 0x%02X", data, reg);
+    ESP_LOGD(TAG, "Transmitted 0x%02X to 0x%02X", data, reg);
     return ESP_OK;
 }
 
@@ -132,5 +140,27 @@ void imu_set_bits(uint8_t reg, uint8_t start_bit, uint8_t width, uint8_t value)
     uint8_t new_val = (old & ~mask) | ((value << start_bit) & mask);
     imu_write(reg, new_val);
     
-    ESP_LOGI(TAG, "Set bits %d:%d of 0x%02X to 0x%02X", start_bit+width-1, start_bit, reg, value);
+    ESP_LOGD(TAG, "Set bits %d:%d of 0x%02X to 0x%02X", start_bit+width-1, start_bit, reg, value);
+}
+
+void imu_clkin_init(void)
+{
+    ledc_timer_config_t timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = LEDC_TIMER_0,
+        .duty_resolution = LEDC_TIMER_1_BIT,  // 50% duty
+        .freq_hz = 32768,                     // 32.768 kHz
+        .clk_cfg = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&timer);
+
+    ledc_channel_config_t channel = {
+        .gpio_num = IMU_CLKIN_PIN,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 1,   // 50% duty for 1-bit resolution
+        .hpoint = 0
+    };
+    ledc_channel_config(&channel);
 }

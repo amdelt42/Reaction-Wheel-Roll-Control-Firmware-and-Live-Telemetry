@@ -21,7 +21,7 @@ void initialize_twai(){
     xTaskCreate(received_message_task, "ReceivedMessageTask", 4096, NULL, 1, NULL);
 
     // Create a new TWAI controller driver instance
-    ESP_LOGI(TAG, "Creating TWAI Node");
+    ESP_LOGD(TAG, "Creating TWAI Node");
     ESP_ERROR_CHECK(twai_new_node_onchip(&node_config, &node_hdl));
     
     twai_event_callbacks_t user_cbs = {
@@ -30,12 +30,14 @@ void initialize_twai(){
     ESP_ERROR_CHECK(twai_node_register_event_callbacks(node_hdl, &user_cbs, NULL));
     
     // Start the TWAI controller
-    ESP_LOGI(TAG, "Starting TWAI Controller");
+    ESP_LOGD(TAG, "Starting TWAI Controller");
     ESP_ERROR_CHECK(twai_node_enable(node_hdl));
     
 
     // Create a queue for sending messages
     xTaskCreate(send_message_task, "SendMessageTask", 4096, NULL, 1, NULL);
+
+    ESP_LOGI(TAG, "TWAI configuration complete");
 }
 
 bool twai_rx_cb(twai_node_handle_t handle, const twai_rx_done_event_data_t *edata, void *user_ctx)

@@ -27,8 +27,10 @@ void initialize_spi(void){
     ESP_LOGI(TAG, "Initializing SPI");
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO));
     
-    ESP_LOGI(TAG, "Adding IMU-Device");
+    ESP_LOGD(TAG, "Adding IMU-Device");
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &device_config, &spi_handle));
+
+    ESP_LOGI(TAG, "SPI configuration complete");
 }
 
 

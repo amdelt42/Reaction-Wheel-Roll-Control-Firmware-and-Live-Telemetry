@@ -13,6 +13,14 @@
 
 void app_main(void)
 {
+    #if BUILD_MODE == BUILD_DEBUG
+    esp_log_level_set("IMU", ESP_LOG_DEBUG);
+    #elif BUILD_MODE == BUILD_TEST
+        esp_log_level_set("IMU", ESP_LOG_INFO);
+    #else
+        esp_log_level_set("IMU", ESP_LOG_WARN);
+    #endif
+
     initialize_blink();
 
     initialize_twai();
