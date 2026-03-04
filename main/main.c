@@ -6,21 +6,20 @@
 // header files
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "config.h"
 #include "blink.h"
 #include "twai.h"
 #include "spi.h"
 #include "imu.h"
+#include "pid.h"
 
 void app_main(void)
 {
-    esp_log_level_set("*", ESP_LOG_INFO);  
+    esp_log_level_set("*", ESP_LOG_DEBUG);  
 
     initialize_blink();
-
     initialize_twai();
-
     initialize_spi();
-
     initialize_imu();
     
     // loop
@@ -28,5 +27,3 @@ void app_main(void)
         vTaskDelay(portMAX_DELAY);
     }
 }
-
-

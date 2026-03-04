@@ -1,4 +1,5 @@
 #include "blink.h"
+
 void initialize_blink(){
     // configure GPIO
     gpio_config_t io_conf = {

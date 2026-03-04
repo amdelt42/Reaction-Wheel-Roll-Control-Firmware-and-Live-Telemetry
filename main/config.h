@@ -1,3 +1,8 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#include <stdint.h>
+
 // LED
 #define LED_PIN 1
 
@@ -36,3 +41,15 @@
 
 #define GYRO_SCALE (1.0f / 16.4f) // LSB/dps for ±2000 dps
 #define DEG_TO_RAD (3.14159265359f / 180.0f)
+#define IMU_MAX_READ_LEN 16
+
+// PID
+#define PID_KP ((float)1.0)
+#define PID_KI ((float)0.01)
+#define PID_KD ((float)0.05)
+#define PID_SETPOINT ((float)0.0)
+#define PID_DT ((float)0.001)
+#define PID_INTEGRAL_MAX ((float)100.0)
+#define PID_OUTPUT_MAX ((float)500.0)
+
+#endif // CONFIG_H

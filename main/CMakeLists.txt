@@ -6,6 +6,7 @@ idf_component_register(
         "components/twai/twai.c"
         "components/imu/imu.c"
         "statemachine/statemachine.c"
+        "pid/pid.c"
     INCLUDE_DIRS 
         "."
         "components/spi"
@@ -13,4 +14,5 @@ idf_component_register(
         "components/twai"
         "components/imu"
         "statemachine"
+        "pid"
 )

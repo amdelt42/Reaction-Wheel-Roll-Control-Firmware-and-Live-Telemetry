@@ -1,7 +1,8 @@
 #include "imu.h"
+#include "pid.h"
 
 static const char TAG[] = "IMU";
-static QueueHandle_t imu_int_queue = NULL;
+QueueHandle_t imu_int_queue = NULL;
 
 void initialize_imu(void){
     ESP_LOGI(TAG, "Initializing IMU");
@@ -58,15 +59,16 @@ void initialize_imu(void){
     xTaskCreate(imu_task, "imu_task", 4096, NULL, 10, NULL);
 }
 
+//WRITE, READ
 esp_err_t imu_read(uint8_t start_reg, uint8_t *data, size_t len)
 {
     spi_transaction_t t = {0};
 
-    if (len == 0 || data == NULL) return ESP_ERR_INVALID_ARG;
+    if (len == 0 || data == NULL || len > IMU_MAX_READ_LEN) 
+        return ESP_ERR_INVALID_ARG;
 
-    // transmit buffer: 1 command byte + len dummy bytes
-    uint8_t tx[len + 1];
-    uint8_t rx[len + 1];
+    uint8_t tx[IMU_MAX_READ_LEN + 1] = {0};
+    uint8_t rx[IMU_MAX_READ_LEN + 1] = {0};
 
     tx[0] = start_reg | 0x80;   // set MSB for read
     memset(&tx[1], 0x00, len);   // dummy bytes
@@ -109,7 +111,6 @@ esp_err_t imu_write(uint8_t reg, uint8_t data)
     ESP_LOGD(TAG, "Transmitted 0x%02X to 0x%02X", data, reg);
     return ESP_OK;
 }
-
 esp_err_t imu_read_gyro(gyro_data_t *gyro)
 {
     uint8_t buf[6];
@@ -127,22 +128,6 @@ esp_err_t imu_read_gyro(gyro_data_t *gyro)
 
     return ESP_OK;
 }
-
-void imu_print_gyro_once(void)
-{
-    gyro_data_t gyro;
-
-    if (imu_read_gyro(&gyro) == ESP_OK)
-    {
-        printf("GYRO [rad/s]: X=%.3f Y=%.3f Z=%.3f\n",
-               gyro.x, gyro.y, gyro.z);
-    }
-    else
-    {
-        printf("Failed to read gyro\n");
-    }
-}
-
 void imu_set_bits(uint8_t reg, uint8_t start_bit, uint8_t width, uint8_t value)
 {
     // read old value
@@ -157,6 +142,7 @@ void imu_set_bits(uint8_t reg, uint8_t start_bit, uint8_t width, uint8_t value)
     ESP_LOGD(TAG, "Set bits %d:%d of 0x%02X to 0x%02X", start_bit+width-1, start_bit, reg, value);
 }
 
+//INT, CLKIN
 void imu_clkin_init(void)
 {
     ledc_timer_config_t timer = {
@@ -194,23 +180,34 @@ void imu_interrupt_init(void)
     gpio_install_isr_service(0);
     gpio_isr_handler_add(IMU_INT_PIN, imu_isr_handler, (void*) IMU_INT_PIN);
 }
-
 void imu_task(void *arg)
 {
     uint32_t io_num;
+    TickType_t last_tick = xTaskGetTickCount();
 
     while (1)
     {
         if (xQueueReceive(imu_int_queue, &io_num, portMAX_DELAY))
         {
-            // Clear latched interrupt
+            // clear latched interrupt
             uint8_t status;
             imu_read(REG_INT_STATUS, &status, 1);
 
             gyro_data_t gyro;
-            if (imu_read_gyro(&gyro) == ESP_OK)
+            if (imu_read_gyro(&gyro) != ESP_OK) continue;
+
+            // dt
+            TickType_t now = xTaskGetTickCount();
+            float dt = (float)(now - last_tick) * portTICK_PERIOD_MS / 1000.0f;
+            last_tick = now;
+
+            if (pid_queue != NULL)
             {
-                //printf("GYRO [rad/s]: X=%.3f Y=%.3f Z=%.3f\n", gyro.x, gyro.y, gyro.z);
+                pid_msg_t msg = {
+                    .measurement = gyro.x,
+                    .dt          = dt
+                };
+                xQueueSend(pid_queue, &msg, 0); 
             }
         }
     }
@@ -219,4 +216,20 @@ void imu_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
     xQueueSendFromISR(imu_int_queue, &gpio_num, NULL);
+}
+
+//optional debug
+void imu_print_gyro_once(void)
+{
+    gyro_data_t gyro;
+
+    if (imu_read_gyro(&gyro) == ESP_OK)
+    {
+        printf("GYRO [rad/s]: X=%.3f Y=%.3f Z=%.3f\n",
+               gyro.x, gyro.y, gyro.z);
+    }
+    else
+    {
+        printf("Failed to read gyro\n");
+    }
 }

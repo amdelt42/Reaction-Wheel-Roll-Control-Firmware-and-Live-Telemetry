@@ -12,7 +12,7 @@ spi_bus_config_t bus_config = {
     .sclk_io_num = SPI_CLK_PIN,
     .quadwp_io_num = -1,
     .quadhd_io_num = -1,
-    .max_transfer_sz = 32,
+    .max_transfer_sz = 64,
 };
 
 spi_device_interface_config_t device_config = {
@@ -25,7 +25,7 @@ spi_device_interface_config_t device_config = {
 
 void initialize_spi(void){
     ESP_LOGI(TAG, "Initializing SPI");
-    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO));
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_DISABLED));
     
     ESP_LOGD(TAG, "Adding IMU-Device");
     ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &device_config, &spi_handle));
