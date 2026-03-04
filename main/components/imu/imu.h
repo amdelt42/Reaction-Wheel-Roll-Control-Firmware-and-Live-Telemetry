@@ -4,6 +4,7 @@
 #include "spi.h"
 #include "driver/ledc.h"
 #include <driver/gpio.h>
+#include "esp_timer.h"
 
 typedef struct {
     float x;
@@ -26,8 +27,5 @@ void imu_clkin_init(void);
 void imu_interrupt_init(void);
 void imu_task(void *arg);
 void imu_isr_handler(void* arg);
-
-//optional debug
-void imu_print_gyro_once(void);
 
 #endif // IMU_H

@@ -2,6 +2,7 @@
 #include "pid.h"
 
 static const char TAG[] = "IMU";
+static int64_t last_time = 0;
 QueueHandle_t imu_int_queue = NULL;
 
 void initialize_imu(void){
@@ -183,7 +184,6 @@ void imu_interrupt_init(void)
 void imu_task(void *arg)
 {
     uint32_t io_num;
-    TickType_t last_tick = xTaskGetTickCount();
 
     while (1)
     {
@@ -196,18 +196,25 @@ void imu_task(void *arg)
             gyro_data_t gyro;
             if (imu_read_gyro(&gyro) != ESP_OK) continue;
 
-            // dt
-            TickType_t now = xTaskGetTickCount();
-            float dt = (float)(now - last_tick) * portTICK_PERIOD_MS / 1000.0f;
-            last_tick = now;
+            // debug
+            printf("z:%.2f", gyro.z);
 
-            if (pid_queue != NULL)
+            // compute dt
+            int64_t now = esp_timer_get_time();
+            if (last_time == 0)
             {
-                pid_msg_t msg = {
-                    .measurement = gyro.x,
-                    .dt          = dt
-                };
-                xQueueSend(pid_queue, &msg, 0); 
+                last_time = now;
+                continue;   
+            }
+            float dt = (now - last_time) / 1e6f;
+            last_time = now;
+
+            // pid
+            if (s_pid != NULL)
+            {
+                // z-axis
+                float output = pid_compute(s_pid, gyro.z, dt);
+                printf(" output: %.2f\n", output);
             }
         }
     }
@@ -216,20 +223,4 @@ void imu_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
     xQueueSendFromISR(imu_int_queue, &gpio_num, NULL);
-}
-
-//optional debug
-void imu_print_gyro_once(void)
-{
-    gyro_data_t gyro;
-
-    if (imu_read_gyro(&gyro) == ESP_OK)
-    {
-        printf("GYRO [rad/s]: X=%.3f Y=%.3f Z=%.3f\n",
-               gyro.x, gyro.y, gyro.z);
-    }
-    else
-    {
-        printf("Failed to read gyro\n");
-    }
 }

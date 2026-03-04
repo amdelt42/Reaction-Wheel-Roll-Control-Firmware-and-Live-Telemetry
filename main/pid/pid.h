@@ -26,9 +26,9 @@ typedef struct {
     float output_max;
 } pid_t;
 
-extern QueueHandle_t pid_queue; 
+extern pid_t *s_pid;
 
 void  initialize_pid(pid_t *pid, float kp, float ki, float kd, float set_pnt, float out_min, float out_max);
+float pid_compute(pid_t *pid, float measurement, float dt);
 void  pid_reset(pid_t *pid);  
-
 #endif // PID_H
