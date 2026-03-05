@@ -1,8 +1,13 @@
 #include "imu.h"
 #include "pid.h"
+#include "mqtt.h"
+#include "twai.h"
 
 static const char TAG[] = "IMU";
 static int64_t last_time = 0;
+static int64_t last_pub = 0;
+static float output = 0.0f; 
+const float PUB_INTERVAL = 0.02f; 
 QueueHandle_t imu_int_queue = NULL;
 
 void initialize_imu(void){
@@ -13,7 +18,6 @@ void initialize_imu(void){
         ESP_LOGE(TAG, "Failed to read WHO_AM_I");
         return;
     }
-
     if (whoami != 0x44) {
         ESP_LOGE(TAG, "Unexpected WHO_AM_I");
         return;
@@ -36,7 +40,7 @@ void initialize_imu(void){
     ESP_LOGD(TAG, "Configuring Gyro");
     imu_write(REG_GYRO_CONFIG0, 0x06); // reset
     imu_set_bits(REG_GYRO_CONFIG0, 5, 3, 0b001);  // ±2000 dps
-    imu_set_bits(REG_GYRO_CONFIG0, 0, 4, 0b1011); // 1 kHz
+    imu_set_bits(REG_GYRO_CONFIG0, 0, 4, 0b0110); // 1 kHz
 
     // Power Config
     ESP_LOGD(TAG, "Configuring PWR");
@@ -53,11 +57,6 @@ void initialize_imu(void){
     imu_set_bits(REG_INT_SOURCE0, 3, 1, 0b1); // UI data ready interrupt routed to INT1 
 
     ESP_LOGI(TAG, "IMU configuration complete");
-
-    uint8_t dummy;
-    imu_read(REG_INT_STATUS, &dummy, 1); // Clear stale interrupts
-    imu_interrupt_init();
-    xTaskCreate(imu_task, "imu_task", 4096, NULL, 10, NULL);
 }
 
 //WRITE, READ
@@ -197,7 +196,7 @@ void imu_task(void *arg)
             if (imu_read_gyro(&gyro) != ESP_OK) continue;
 
             // debug
-            printf("z:%.2f", gyro.z);
+            //printf("z:%.2f", gyro.z);
 
             // compute dt
             int64_t now = esp_timer_get_time();
@@ -212,9 +211,22 @@ void imu_task(void *arg)
             // pid
             if (s_pid != NULL)
             {
-                // z-axis
-                float output = pid_compute(s_pid, gyro.z, dt);
-                printf(" output: %.2f\n", output);
+                output = pid_compute(s_pid, gyro.z, dt);
+                //debug
+                //printf(" output: %.2f\n", output);
+            }
+
+            // publish via mqtt
+            float dt_pub = (now - last_pub) / 1e6f;
+            if (dt_pub >= PUB_INTERVAL) {
+                last_pub = now;
+                char payload[64];
+                snprintf(payload, sizeof(payload),
+                    "{\"gz\":%.3f,\"out\":%.3f,\"t\":%"PRId64"}",
+                    gyro.z, output, now);
+                mqtt_publish("rocket/telemetry", payload);
+                // TWAI
+                send_message(output);
             }
         }
     }
@@ -223,4 +235,15 @@ void imu_isr_handler(void* arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
     xQueueSendFromISR(imu_int_queue, &gpio_num, NULL);
+}
+
+//START
+void imu_start(void)
+{
+    // start interrupts and task only when called explicitly
+    uint8_t dummy;
+    imu_read(REG_INT_STATUS, &dummy, 1);
+    imu_interrupt_init();
+    xTaskCreate(imu_task, "imu_task", 4096, NULL, 10, NULL);
+    ESP_LOGI(TAG, "IMU task started");
 }

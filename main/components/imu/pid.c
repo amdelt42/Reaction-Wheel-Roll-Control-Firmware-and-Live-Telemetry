@@ -1,11 +1,15 @@
 #include "pid.h"
-#include "twai.h"   // twai_send_motor_cmd() — adapt to your frame format
 
 static const char TAG[] = "PID";
 
-pid_t *s_pid = NULL;  
+static inline float clamp(float val, float lo, float hi) 
+{ 
+    if (val > hi) return hi; 
+    if (val < lo) return lo; 
+    return val; 
+}
 
-static inline float clamp(float val, float lo, float hi) { if (val > hi) return hi; if (val < lo) return lo; return val; }
+ pid_t *s_pid = NULL;  
 
 void initialize_pid(pid_t *pid, float kp, float ki, float kd, float set_pnt, float out_min, float out_max)
 {
@@ -35,17 +39,26 @@ float pid_compute(pid_t *pid, float measurement, float dt)
 { 
     if (dt <= 0.0f) return 0.0f; 
     float error = pid->setpoint - measurement; 
+
     // proportional 
     float p_term = pid->kp * error; 
-    // integral 
-    pid->integral += error * dt; 
-    pid->integral = clamp(pid->integral, -pid->integral_max, pid->integral_max); 
-    float i_term = pid->ki * pid->integral; 
+
     // derivative 
     float d_term = -pid->kd * (measurement - pid->prev_measurement) / dt; 
     pid->prev_measurement = measurement; 
-    
+
+    // anti-windup check
+    float raw_output = p_term + pid->ki * pid->integral + d_term;
+
+    // integral
+    if (raw_output < pid->output_max && raw_output > pid->output_min) {
+        pid->integral += error * dt;
+        pid->integral = clamp(pid->integral, -pid->integral_max, pid->integral_max); 
+    }
+
+    float i_term = pid->ki * pid->integral; 
     float output = clamp(p_term + i_term + d_term, pid->output_min, pid->output_max); 
+
     ESP_LOGD(TAG, "e=%.4f P=%.4f I=%.4f D=%.4f -> out=%.4f", error, p_term, i_term, d_term, output); 
     return output; 
 }

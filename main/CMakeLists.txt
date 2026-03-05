@@ -1,18 +1,20 @@
 idf_component_register(
     SRCS 
         "main.c"
-        "components/spi/spi.c"
         "components/blink/blink.c"
         "components/twai/twai.c"
+        "components/imu/spi.c"
         "components/imu/imu.c"
+        "components/imu/pid.c"
         "statemachine/statemachine.c"
-        "pid/pid.c"
+        "datastreaming/wifi.c"
+        "datastreaming/mqtt.c"
     INCLUDE_DIRS 
         "."
-        "components/spi"
         "components/blink"
         "components/twai"
         "components/imu"
         "statemachine"
-        "pid"
+        "datastreaming"
+        
 )

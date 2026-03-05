@@ -32,10 +32,6 @@ void initialize_twai(){
     // Start the TWAI controller
     ESP_LOGD(TAG, "Starting TWAI Controller");
     ESP_ERROR_CHECK(twai_node_enable(node_hdl));
-    
-
-    // Create a queue for sending messages
-    xTaskCreate(send_message_task, "SendMessageTask", 4096, NULL, 1, NULL);
 
     ESP_LOGI(TAG, "TWAI configuration complete");
 }
@@ -68,20 +64,30 @@ void received_message_task(void *arg){
     }
 }
 
-void send_message_task (void *args){
-    // Example data to send
-    uint8_t send_buff[8] = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01, 0x02, 0x03}; 
+void send_message(float pid_value){
+    uint8_t send_buff[4]; 
+
+    float_to_bytes(pid_value, send_buff);
 
     twai_frame_t tx_frame = {
-        .header.id = 0x1,           // Message ID
+        .header.id = 0x00E,           // Message ID
         .header.ide = false,         // Use 29-bit extended ID format
         .buffer = send_buff,        // Pointer to data to transmit
         .buffer_len = sizeof(send_buff),  // Length of data to transmit 
     };
 
-    while (1)   
-    {       
-        ESP_ERROR_CHECK(twai_node_transmit(node_hdl, &tx_frame, 0));
-        vTaskDelay(pdMS_TO_TICKS(1000));  // Delay for 1 second
-    }   
+    ESP_ERROR_CHECK(twai_node_transmit(node_hdl, &tx_frame, 0));
+}
+
+void float_to_bytes(float val, uint8_t *buf) {
+    union {
+        float f;
+        uint8_t b[4];
+    } u;
+    u.f = val;
+
+    buf[0] = u.b[3];
+    buf[1] = u.b[2];
+    buf[2] = u.b[1];
+    buf[3] = u.b[0];
 }

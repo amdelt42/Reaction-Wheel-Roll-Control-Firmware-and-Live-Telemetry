@@ -11,17 +11,14 @@ void initialize_blink(){
     };
     gpio_config(&io_conf);
 
-    xTaskCreate(blink_task,"blink",32,NULL,1,NULL);
+    xTaskCreate(blink_task,"blink",1024,NULL,1,NULL);
 }
 
-void blink_task(){
-    while(1){
-        // turn LED ON
+void blink_task(void *arg) {  
+    while(1) {
         gpio_set_level(LED_PIN, 1);
-        vTaskDelay(pdMS_TO_TICKS(1000)); // delay 1 second
-
-        // turn LED OFF
+        vTaskDelay(pdMS_TO_TICKS(1000));
         gpio_set_level(LED_PIN, 0);
-        vTaskDelay(pdMS_TO_TICKS(1000)); // delay 1 second
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }

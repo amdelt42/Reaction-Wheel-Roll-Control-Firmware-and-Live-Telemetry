@@ -7,18 +7,13 @@
 #include "freertos/queue.h"
 
 typedef struct {
-    float measurement;  // rad/s
-    float dt;           // s
-} pid_msg_t;
-
-typedef struct {
     float kp;
     float ki;
     float kd;
 
     float integral;
-    float integral_max;      // symmetric clamp: ±integral_max
-    float prev_measurement;  // derivative on measurement, not error
+    float integral_max;      
+    float prev_measurement;  
 
     float setpoint;
 
