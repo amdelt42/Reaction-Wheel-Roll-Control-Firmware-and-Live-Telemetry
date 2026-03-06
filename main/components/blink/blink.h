@@ -5,8 +5,10 @@
 #include <driver/gpio.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include "mqtt.h"
 
-void initialize_blink();
-void blink_task();
+void initialize_blink(void);
+extern void blink_task(void *arg);
+extern void set_blink_pattern(rocket_state_t state);
 
 #endif // BLINK_H

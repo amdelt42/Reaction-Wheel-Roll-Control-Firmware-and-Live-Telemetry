@@ -15,6 +15,7 @@
 #include "imu.h"
 #include "pid.h"
 #include "wifi.h"
+#include "statemachine.h"
 
 static const char *TAG = "MAIN";
 static pid_t roll_pid;
@@ -47,9 +48,7 @@ void app_main(void)
     initialize_imu();
     initialize_pid(&roll_pid, PID_KP, PID_KI, PID_KD, PID_SETPOINT, -PID_OUTPUT_MAX, PID_OUTPUT_MAX);
     initialize_wifi();
-
-    // app
-    imu_start();   
+    initialize_sm();
 
     // loop
     while (1) {

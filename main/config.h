@@ -46,12 +46,14 @@
 // PID
 #define PID_KP ((float)1.0)
 #define PID_KI ((float)0.01)
-#define PID_KD ((float)0.01)
+#define PID_KD ((float)0.00)
 #define PID_SETPOINT ((float)0.0)
 #define PID_OUTPUT_MAX ((float)500.0)
 
 // WIFI
 #define WIFI_SSID "bim_mobile_wifi"
 #define WIFI_PASS "mypookiesotootie"
+
+#define PUB_INTERVAL_US  10000LL
 
 #endif // CONFIG_H

@@ -7,7 +7,9 @@ static const char TAG[] = "IMU";
 static int64_t last_time = 0;
 static int64_t last_pub = 0;
 static float output = 0.0f; 
-const float PUB_INTERVAL = 0.02f; 
+static TaskHandle_t imu_task_handle = NULL;
+bool pid_enabled  = false;
+bool twai_enabled = false;
 QueueHandle_t imu_int_queue = NULL;
 
 void initialize_imu(void){
@@ -30,7 +32,7 @@ void initialize_imu(void){
 
     // Configure CLKIN 
     ESP_LOGD(TAG, "Configuring CLKIN");
-    imu_write(REG_INTF_CONFIG5, 0x00); // reset
+    //imu_write(REG_INTF_CONFIG5, 0x00); // reset
     imu_set_bits(REG_INTF_CONFIG5, 1, 2, 0b10);  // CLKIN enable
     
     //imu_write(REG_INTF_CONFIG1, 0x51);
@@ -38,24 +40,36 @@ void initialize_imu(void){
 
     // Gyro config
     ESP_LOGD(TAG, "Configuring Gyro");
-    imu_write(REG_GYRO_CONFIG0, 0x06); // reset
+    //imu_write(REG_GYRO_CONFIG0, 0x06); // reset
     imu_set_bits(REG_GYRO_CONFIG0, 5, 3, 0b001);  // ±2000 dps
     imu_set_bits(REG_GYRO_CONFIG0, 0, 4, 0b0110); // 1 kHz
 
     // Power Config
     ESP_LOGD(TAG, "Configuring PWR");
-    imu_write(REG_PWR_MGMT0, 0x00); // reset
+    //imu_write(REG_PWR_MGMT0, 0x00); // reset
     imu_set_bits(REG_PWR_MGMT0, 2, 2, 0b11);     // Gyro ON
     vTaskDelay(pdMS_TO_TICKS(100));    
 
     // INT config
     ESP_LOGD(TAG, "Configuring INT");
-    imu_write(REG_INT_CONFIG, 0x00); // reset
+    //imu_write(REG_INT_CONFIG, 0x00); // reset
     imu_set_bits(REG_INT_CONFIG, 0, 3, 0b111); // push-pull, active high, latched
 
-    imu_write(REG_INT_SOURCE0, 0x10); // reset
+    //imu_write(REG_INT_SOURCE0, 0x10); // reset
     imu_set_bits(REG_INT_SOURCE0, 3, 1, 0b1); // UI data ready interrupt routed to INT1 
 
+    imu_int_queue = xQueueCreate(10, sizeof(uint32_t));
+
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_POSEDGE,   // active HIGH
+        .mode = GPIO_MODE_INPUT,
+        .pin_bit_mask = (1ULL << IMU_INT_PIN),
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE
+    };
+    gpio_config(&io_conf);
+
+    gpio_install_isr_service(0);
     ESP_LOGI(TAG, "IMU configuration complete");
 }
 
@@ -166,18 +180,10 @@ void imu_clkin_init(void)
 }
 void imu_interrupt_init(void)
 {
-    imu_int_queue = xQueueCreate(10, sizeof(uint32_t));
+    if (imu_int_queue == NULL)
+        imu_int_queue = xQueueCreate(10, sizeof(uint32_t));
 
-    gpio_config_t io_conf = {
-        .intr_type = GPIO_INTR_POSEDGE,   // active HIGH
-        .mode = GPIO_MODE_INPUT,
-        .pin_bit_mask = (1ULL << IMU_INT_PIN),
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE
-    };
-    gpio_config(&io_conf);
-
-    gpio_install_isr_service(0);
+    gpio_isr_handler_remove(IMU_INT_PIN);
     gpio_isr_handler_add(IMU_INT_PIN, imu_isr_handler, (void*) IMU_INT_PIN);
 }
 void imu_task(void *arg)
@@ -209,7 +215,7 @@ void imu_task(void *arg)
             last_time = now;
 
             // pid
-            if (s_pid != NULL)
+            if (s_pid != NULL && pid_enabled)
             {
                 output = pid_compute(s_pid, gyro.z, dt);
                 //debug
@@ -217,16 +223,16 @@ void imu_task(void *arg)
             }
 
             // publish via mqtt
-            float dt_pub = (now - last_pub) / 1e6f;
-            if (dt_pub >= PUB_INTERVAL) {
+            if ((now - last_pub) >= PUB_INTERVAL_US) {
                 last_pub = now;
                 char payload[64];
-                snprintf(payload, sizeof(payload),
+                int len = snprintf(payload, sizeof(payload),
                     "{\"gz\":%.3f,\"out\":%.3f,\"t\":%"PRId64"}",
                     gyro.z, output, now);
-                mqtt_publish("rocket/telemetry", payload);
+                mqtt_publish("rocket/telemetry", payload, len);
                 // TWAI
-                send_message(output);
+                if (twai_enabled)
+                    send_message(output);
             }
         }
     }
@@ -237,13 +243,34 @@ void imu_isr_handler(void* arg)
     xQueueSendFromISR(imu_int_queue, &gpio_num, NULL);
 }
 
-//START
+//START, STOP
 void imu_start(void)
 {
-    // start interrupts and task only when called explicitly
-    uint8_t dummy;
-    imu_read(REG_INT_STATUS, &dummy, 1);
-    imu_interrupt_init();
-    xTaskCreate(imu_task, "imu_task", 4096, NULL, 10, NULL);
-    ESP_LOGI(TAG, "IMU task started");
+    if (imu_task_handle == NULL)
+    {
+        last_time = 0;
+
+        xQueueReset(imu_int_queue);
+        
+        uint8_t dummy;
+        imu_read(REG_INT_STATUS, &dummy, 1);
+        gpio_intr_enable(IMU_INT_PIN);
+        imu_interrupt_init();
+        xTaskCreate(imu_task, "imu_task", 4096, NULL, 10, &imu_task_handle);
+        ESP_LOGI(TAG, "IMU task started");
+    }
+}
+
+void imu_stop(void)
+{
+    if (imu_task_handle != NULL) 
+    {
+        gpio_intr_disable(IMU_INT_PIN); 
+        gpio_isr_handler_remove(IMU_INT_PIN);
+
+        vTaskDelete(imu_task_handle);
+        imu_task_handle = NULL;
+    }
+
+    ESP_LOGI(TAG, "IMU task stopped");
 }

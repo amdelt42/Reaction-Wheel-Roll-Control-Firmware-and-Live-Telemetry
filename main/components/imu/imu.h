@@ -31,5 +31,9 @@ void imu_isr_handler(void* arg);
 
 //START
 void imu_start(void);
+void imu_stop(void);
+
+extern bool pid_enabled;
+extern bool twai_enabled;
 
 #endif // IMU_H
