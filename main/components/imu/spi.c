@@ -16,7 +16,7 @@ spi_bus_config_t bus_config = {
 };
 
 spi_device_interface_config_t device_config = {
-    .clock_speed_hz = 1 * 1000 * 1000, // 1 MHz
+    .clock_speed_hz = 10 * 1000 * 1000, // 10 MHz
     .duty_cycle_pos = 128, // 50% duty cycle
     .mode = 0, // SPI mode 0
     .spics_io_num = SPI_CS_PIN,
