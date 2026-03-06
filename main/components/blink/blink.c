@@ -1,5 +1,6 @@
 #include "blink.h"
 
+static TaskHandle_t blink_task_handle = NULL;
 
 void initialize_blink(void){
     gpio_config_t io_conf = {
@@ -12,8 +13,6 @@ void initialize_blink(void){
     gpio_config(&io_conf);
 }
 
-static TaskHandle_t blink_task_handle = NULL;
-
 void blink_task(void *arg)
 {
     uint32_t pattern = (uint32_t)arg;  
@@ -23,7 +22,7 @@ void blink_task(void *arg)
         switch (pattern)
         {
         case ROCKET_STATE_IDLE:
-            printf("idle led\n");
+            //printf("idle led\n");
             gpio_set_level(LED_PIN, 1);
             vTaskDelay(pdMS_TO_TICKS(100));
             gpio_set_level(LED_PIN, 0);
@@ -31,7 +30,7 @@ void blink_task(void *arg)
             break;
 
         case ROCKET_STATE_ARMED:
-            printf("armed led\n");
+            //printf("armed led\n");
             gpio_set_level(LED_PIN, 1);
             vTaskDelay(pdMS_TO_TICKS(100));
             gpio_set_level(LED_PIN, 0);
@@ -43,13 +42,13 @@ void blink_task(void *arg)
             break;
 
         case ROCKET_STATE_LAUNCH:
-            printf("launch led\n");
+            //printf("launch led\n");
             gpio_set_level(LED_PIN, 1);
             vTaskDelay(pdMS_TO_TICKS(2000));  
             break;
 
         case ROCKET_STATE_ABORT:
-            printf("abort led\n");
+            //printf("abort led\n");
             gpio_set_level(LED_PIN, 0);
             vTaskDelay(pdMS_TO_TICKS(2000));    
             break;

@@ -47,8 +47,8 @@ void app_main(void)
     initialize_spi();
     initialize_imu();
     initialize_pid(&roll_pid, PID_KP, PID_KI, PID_KD, PID_SETPOINT, -PID_OUTPUT_MAX, PID_OUTPUT_MAX);
-    initialize_wifi();
     initialize_sm();
+    initialize_wifi();
 
     // loop
     while (1) {

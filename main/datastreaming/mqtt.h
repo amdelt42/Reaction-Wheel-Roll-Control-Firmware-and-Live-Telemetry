@@ -16,6 +16,8 @@ typedef enum {
 } rocket_state_t;
 
 extern volatile rocket_state_t rocket_state;
+extern int mqtt_log_vprintf(const char *fmt, va_list args);
+extern bool mqtt_ever_connected;
 
 // MQTT
 void initialize_mqtt(void);

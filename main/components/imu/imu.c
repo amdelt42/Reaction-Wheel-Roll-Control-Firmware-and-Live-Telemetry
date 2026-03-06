@@ -8,6 +8,7 @@ static int64_t last_time = 0;
 static int64_t last_pub = 0;
 static float output = 0.0f; 
 static TaskHandle_t imu_task_handle = NULL;
+static volatile bool imu_stop_requested = false;
 bool pid_enabled  = false;
 bool twai_enabled = false;
 QueueHandle_t imu_int_queue = NULL;
@@ -53,7 +54,7 @@ void initialize_imu(void){
     // INT config
     ESP_LOGD(TAG, "Configuring INT");
     //imu_write(REG_INT_CONFIG, 0x00); // reset
-    imu_set_bits(REG_INT_CONFIG, 0, 3, 0b111); // push-pull, active high, latched
+    imu_set_bits(REG_INT_CONFIG, 0, 3, 0b011); // push-pull, active high, pulsed
 
     //imu_write(REG_INT_SOURCE0, 0x10); // reset
     imu_set_bits(REG_INT_SOURCE0, 3, 1, 0b1); // UI data ready interrupt routed to INT1 
@@ -189,11 +190,17 @@ void imu_interrupt_init(void)
 void imu_task(void *arg)
 {
     uint32_t io_num;
+    imu_stop_requested = false;
 
     while (1)
     {
         if (xQueueReceive(imu_int_queue, &io_num, portMAX_DELAY))
-        {
+        {   
+            if (imu_stop_requested) {
+                imu_task_handle = NULL;
+                vTaskDelete(NULL); 
+                return;
+            }
             // clear latched interrupt
             uint8_t status;
             imu_read(REG_INT_STATUS, &status, 1);
@@ -248,6 +255,7 @@ void imu_start(void)
 {
     if (imu_task_handle == NULL)
     {
+        imu_stop_requested = false;
         last_time = 0;
 
         xQueueReset(imu_int_queue);
@@ -263,14 +271,17 @@ void imu_start(void)
 
 void imu_stop(void)
 {
-    if (imu_task_handle != NULL) 
+    if (imu_task_handle != NULL)
     {
-        gpio_intr_disable(IMU_INT_PIN); 
+        gpio_intr_disable(IMU_INT_PIN);
         gpio_isr_handler_remove(IMU_INT_PIN);
 
-        vTaskDelete(imu_task_handle);
+        imu_stop_requested = true;
+        uint32_t dummy = 0;
+        xQueueSend(imu_int_queue, &dummy, pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(20));
+
         imu_task_handle = NULL;
     }
-
     ESP_LOGI(TAG, "IMU task stopped");
 }

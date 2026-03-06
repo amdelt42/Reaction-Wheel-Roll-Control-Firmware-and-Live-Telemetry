@@ -22,13 +22,15 @@ BROKER_PORT   = 1883
 TOPIC_TEL     = "rocket/telemetry"
 TOPIC_PID     = "rocket/pid_set"
 TOPIC_STATE   = "rocket/state"
-MAX_POINTS    = 2400
-PLOT_WINDOW_S = 30.0
+TOPIC_DEBUG   = "rocket/debug"
+MAX_POINTS    = 2000
+PLOT_WINDOW_S = 20.0
 
 # ─── State ────────────────────────────────────────────────────────────────────
 gz_buf    = deque(maxlen=MAX_POINTS)
 out_buf   = deque(maxlen=MAX_POINTS)
 t_buf     = deque(maxlen=MAX_POINTS)
+debug_lines = deque(maxlen=200)
 lock      = threading.Lock()
 
 mqtt_client   = None
@@ -39,12 +41,15 @@ current_hz    = 0.0
 current_state = "IDLE"
 plot_paused = False
 t_origin = None 
+last_state_change = 0.0
+STATE_CHANGE_COOLDOWN = 2 #seconds
 
 # ─── MQTT ─────────────────────────────────────────────────────────────────────
 def on_connect(client, userdata, flags, reason_code, properties):
     global connected
     connected = (reason_code == 0)
     client.subscribe(TOPIC_TEL)
+    client.subscribe(TOPIC_DEBUG)
 
 def on_disconnect(client, userdata, flags, reason_code, properties):
     global connected
@@ -52,6 +57,12 @@ def on_disconnect(client, userdata, flags, reason_code, properties):
 
 def on_message(client, userdata, msg):
     global msg_count, last_hz_time, current_hz
+
+    if msg.topic == TOPIC_DEBUG:
+        text = msg.payload.decode(errors="replace").strip()
+        append_debug_log(text)
+        return
+
     try:
         data = json.loads(msg.payload.decode())
         gz  = data.get("gz",  0.0)
@@ -100,6 +111,24 @@ def publish_state(state: str):
     if mqtt_client and connected:
         mqtt_client.publish(TOPIC_STATE, state)
 
+def update_buttons():
+    states = {
+        "IDLE":   dict(arm=True,  idle=True, launch=False),
+        "ARMED":  dict(arm=True, idle=True,  launch=True),
+        "LAUNCH": dict(arm=False, idle=True,  launch=True),
+        "ABORT":  dict(arm=False,  idle=False, launch=False),  
+    }
+
+    s = states.get(current_state, dict(arm=True, idle=False, launch=False))
+
+    dpg.configure_item("btn_armed",  enabled=s["arm"])
+    dpg.configure_item("btn_idle",   enabled=s["idle"])
+    dpg.configure_item("btn_launch", enabled=s["launch"])
+
+def append_debug_log(text):
+    debug_lines.append(text)
+    dpg.set_value("debug_log", "\n".join(debug_lines))
+
 # ─── Callbacks ────────────────────────────────────────────────────────────────
 def cb_send_pid(sender, app_data):
     kp = dpg.get_value("kp_input")
@@ -110,7 +139,15 @@ def cb_send_pid(sender, app_data):
     #dpg.set_value("pid_status", f"Sent  Kp={kp:.3f}  Ki={ki:.4f}  Kd={kd:.3f}  SP={sp:.2f}")
 
 def cb_state(sender, app_data, user_data):
-    global current_state
+    global current_state, last_state_change
+
+    now = time.time() 
+
+    if user_data != "ABORT":
+        if now - last_state_change < STATE_CHANGE_COOLDOWN:
+            return
+        last_state_change = now
+
     current_state = user_data
     publish_state(user_data)
 
@@ -287,6 +324,9 @@ def build_gui():
             dpg.add_text("IDLE",   tag="state_label", color=DIM)
             dpg.add_spacer(width=20)
             dpg.add_button(label="Pause Plot", tag="pause_btn", callback=cb_pause_plot)
+            dpg.add_spacer(width=20)
+            dpg.add_text("CMD:", color=TEXT_DIM)
+            dpg.add_text("", tag="cooldown_label", color=TEXT_DIM)
         dpg.add_separator()
         dpg.add_spacer(height=6)
 
@@ -352,23 +392,27 @@ def build_gui():
                                     tag="btn_armed",
                                     callback=cb_state,
                                     user_data="ARMED",
+                                    enabled=True,
                                     width=-1)
 
                         dpg.add_button(label="IDLE",
                                     tag="btn_idle",
                                     callback=cb_state,
                                     user_data="IDLE",
+                                    enabled=True,
                                     width=-1)
 
                 dpg.add_spacer(height=6)
                 dpg.add_button(label="LAUNCH",
                                tag="btn_launch",
                                callback=cb_state, user_data="LAUNCH",
+                               enabled=True,
                                width=-1, height=40)
                 dpg.add_spacer(height=6)
                 dpg.add_button(label="ABORT",
                                tag="btn_abort",
                                callback=cb_state, user_data="ABORT",
+                               enabled=True,
                                width=-1, height=40)
                 dpg.add_spacer(height=10)
 
@@ -389,8 +433,14 @@ def build_gui():
                         dpg.add_text("Gyro.z Min", color=TEXT_DIM)
                         dpg.add_text("0.0000", tag="min_gz")
                     with dpg.table_row():
-                        dpg.add_text("Output", color=TEXT_DIM)
+                        dpg.add_text("PID Out", color=TEXT_DIM)
                         dpg.add_text("0.0000", tag="live_out")
+                    with dpg.table_row():
+                        dpg.add_text("PID Out Max", color=TEXT_DIM)
+                        dpg.add_text("0.0000", tag="max_out")
+                    with dpg.table_row():
+                        dpg.add_text("PID Out Min", color=TEXT_DIM)
+                        dpg.add_text("0.0000", tag="min_out")
                     
             dpg.add_spacer(width=8)
 
@@ -431,26 +481,44 @@ def build_gui():
             # ── Right panel ────────────────────────────────────────────────────
             with dpg.child_window(width=320, height=-1, border=True):
 
-                # ODRIVE
+                # ODrive panel
                 dpg.add_text("ODRIVE", color=ACCENT)
                 dpg.add_separator()
                 dpg.add_spacer(height=4)
-                dpg.add_text("Battery Voltage", color=TEXT_DIM)
-                dpg.add_progress_bar(tag="battery_volt", default_value=1.0, width=-1)
-                dpg.add_text("Current Draw", color=TEXT_DIM)
-                dpg.add_progress_bar(tag="battery_curr", default_value=0.0, width=-1)
-                dpg.add_text("Motor RPM", color=TEXT_DIM)
-                dpg.add_progress_bar(tag="wheel_rpm", default_value=0.0, width=-1)
-                dpg.add_text("Motor Torque", color=TEXT_DIM)
-                dpg.add_progress_bar(tag="wheel_torque", default_value=0.0, width=-1)
-                dpg.add_spacer(height=10)
+                with dpg.table(header_row=False, borders_innerV=False):
+                    dpg.add_table_column()
+                    dpg.add_table_column()
+                    with dpg.table_row():
+                        dpg.add_text("Voltage", color=TEXT_DIM)
+                        dpg.add_text("-- V", tag="odrive_volt")
+                    with dpg.table_row():
+                        dpg.add_text("Current", color=TEXT_DIM)
+                        dpg.add_text("-- A", tag="odrive_curr")
+                    with dpg.table_row():
+                        dpg.add_text("RPM", color=TEXT_DIM)
+                        dpg.add_text("-- RPM", tag="odrive_rpm")
+                    with dpg.table_row():
+                        dpg.add_text("Torque", color=TEXT_DIM)
+                        dpg.add_text("-- Nm", tag="odrive_torque")
+                    with dpg.table_row():
+                        dpg.add_text("Axis State", color=TEXT_DIM)
+                        dpg.add_text("--", tag="odrive_state")
+                    with dpg.table_row():
+                        dpg.add_text("Error", color=TEXT_DIM)
+                        dpg.add_text("--", tag="odrive_error")
 
                 # ESP32 DEBUG
-                dpg.add_text("ESP32 DEBUG", color=ACCENT)
+                dpg.add_text("DEBUG", color=ACCENT)
                 dpg.add_separator()
                 dpg.add_spacer(height=4)
-                with dpg.child_window(tag="debug_log_window", autosize_x=True, height=-1, border=True, horizontal_scrollbar=False):
-                    dpg.add_text("Waiting for debug messages...", tag="debug_log", color=ACCENT2)
+                dpg.add_input_text(
+                    tag="debug_log",
+                    default_value="Waiting for debug messages...",
+                    multiline=True,
+                    readonly=True,
+                    width=-1,
+                    height=-1,
+                )
                 
 
     dpg.setup_dearpygui()
@@ -467,7 +535,22 @@ def update_gui():
     else:
         dpg.configure_item("conn_dot",   color=ACCENT2)
         dpg.set_value("conn_label", "DISCONNECTED")
-        dpg.configure_item("conn_label", color=DIM)
+        dpg.configure_item("conn_label", color=STATE_COLORS.get("ABORT", DIM))
+
+    # Cooldown indicator
+    remaining = STATE_CHANGE_COOLDOWN - (time.time() - last_state_change)
+    if current_state == "ABORT":
+        dpg.set_value("cooldown_label", "ABORTED")
+        dpg.configure_item("cooldown_label", color=STATE_COLORS["ABORT"])
+    elif remaining > 0:
+        dpg.set_value("cooldown_label", f"LOCK  {remaining:.1f}s")
+        dpg.configure_item("cooldown_label", color=STATE_COLORS["ARMED"])
+    else:
+        dpg.set_value("cooldown_label", "READY")
+        dpg.configure_item("cooldown_label", color=ACCENT)
+
+    # Buttons
+    update_buttons()
 
     # Hz
     dpg.set_value("hz_label", f"{current_hz:.1f} Hz")
@@ -513,9 +596,11 @@ def update_gui():
     # Live readouts
     if gz_list:
         dpg.set_value("live_gz",  f"{gz_list[-1]:.4f} rad/s")
+        dpg.set_value("max_gz",   f"{max(gz_list):.4f} rad/s")
+        dpg.set_value("min_gz",   f"{min(gz_list):.4f} rad/s")
         dpg.set_value("live_out", f"{out_list[-1]:.4f}")
-        dpg.set_value("max_gz", f"{max(gz_list):.4f} rad/s")
-        dpg.set_value("min_gz", f"{min(gz_list):.4f} rad/s")
+        dpg.set_value("max_out",  f"{max(out_list):.4f}")
+        dpg.set_value("min_out",  f"{min(out_list):.4f}")
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

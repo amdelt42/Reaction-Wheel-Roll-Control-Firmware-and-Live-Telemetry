@@ -5,6 +5,7 @@
 static const char *TAG = "MQTT";
 static esp_mqtt_client_handle_t mqtt_client = NULL;
 static bool mqtt_connected = false;
+bool mqtt_ever_connected = false;
 
 volatile rocket_state_t rocket_state = ROCKET_STATE_IDLE;
 
@@ -75,17 +76,24 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
     switch ((esp_mqtt_event_id_t)event_id)
     {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT connected");
         mqtt_connected = true;
+        mqtt_ever_connected = true;
 
         esp_mqtt_client_subscribe(mqtt_client, "rocket/pid_set", 1);
         esp_mqtt_client_subscribe(mqtt_client, "rocket/state",   1);
-        ESP_LOGI(TAG, "Subscribed to rocket/pid_set and rocket/state");
+
+        ESP_LOGI(TAG, "MQTT connected");
+        ESP_LOGI(TAG, "Debug Logging Ready");
         break;
 
     case MQTT_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "MQTT disconnected");
         mqtt_connected = false;
+
+        if (mqtt_ever_connected && sm_queue != NULL) {
+            rocket_state_t abort = ROCKET_STATE_ABORT;
+            xQueueSend(sm_queue, &abort, 0);
+        }
         break;
 
     case MQTT_EVENT_DATA:
@@ -126,6 +134,7 @@ void initialize_mqtt(void)
 
     esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     esp_mqtt_client_start(mqtt_client);
+    esp_log_set_vprintf(mqtt_log_vprintf);
 }
 
 void mqtt_publish(const char *topic, const char *payload, int len)
@@ -133,4 +142,24 @@ void mqtt_publish(const char *topic, const char *payload, int len)
     if (mqtt_connected && mqtt_client != NULL) {
         esp_mqtt_client_publish(mqtt_client, topic, payload, len, 0, 0);
     }
+}
+
+int mqtt_log_vprintf(const char *fmt, va_list args)
+{
+    int ret = vprintf(fmt, args);
+
+    static volatile bool in_log = false;
+    if (in_log || !mqtt_connected || mqtt_client == NULL) return ret;
+
+    in_log = true;
+
+    char buf[256];
+    va_list args_copy;
+    va_copy(args_copy, args);
+    vsnprintf(buf, sizeof(buf), fmt, args_copy);
+    va_end(args_copy);
+    esp_mqtt_client_publish(mqtt_client, "rocket/debug", buf, 0, 0, 0);
+
+    in_log = false;
+    return ret;
 }

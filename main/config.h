@@ -45,8 +45,8 @@
 
 // PID
 #define PID_KP ((float)1.0)
-#define PID_KI ((float)0.01)
-#define PID_KD ((float)0.00)
+#define PID_KI ((float)0.0)
+#define PID_KD ((float)0.0)
 #define PID_SETPOINT ((float)0.0)
 #define PID_OUTPUT_MAX ((float)500.0)
 

@@ -47,9 +47,11 @@ void initialize_wifi(void)
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data)
-{
+{ //mqtt_ever_connected
     if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        if (s_retry < 5) {
+        if (mqtt_ever_connected) {
+            return;
+        } else if (s_retry < 5) {
             esp_wifi_connect();
             s_retry++;
             ESP_LOGI(TAG, "Retrying WiFi connection (%d/5)", s_retry);

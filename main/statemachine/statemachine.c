@@ -29,19 +29,19 @@ void statemachine_task(void *arg)
 
         if (last_state == ROCKET_STATE_ABORT) 
         {
-            ESP_LOGW(TAG, "Ignoring transition, RESET required", state);
+            ESP_LOGW("ABORT", "RESET required", state);
             continue;
         }
         
         if (state != last_state) {
-            ESP_LOGI(TAG, "State change: %d → %d", last_state, state);
+            //ESP_LOGI(TAG, "State change: %d → %d", last_state, state);
             last_state = state;
 
             switch (state)
             {
             case ROCKET_STATE_IDLE:
                 // PID off, IMU off, motor idle
-                printf("IDLE State Triggered\n");
+                ESP_LOGI(TAG, "IDLE state triggered");
                 set_enabled(PID, false);
                 set_enabled(TWAI, false);
                 imu_stop();
@@ -50,8 +50,8 @@ void statemachine_task(void *arg)
 
             case ROCKET_STATE_ARMED:
                 // PID on, IMU on, motor idle
-                printf("ARMED State Triggered\n");
-                set_enabled(PID, false);
+                ESP_LOGI(TAG, "ARMED state triggered");
+                set_enabled(PID, true);
                 set_enabled(TWAI, false);
                 imu_start();
                 set_blink_pattern(state);
@@ -59,15 +59,15 @@ void statemachine_task(void *arg)
 
             case ROCKET_STATE_LAUNCH:
                 // PID on, IMU on, motor active
-                printf("LAUNCH State Triggered\n");
+                ESP_LOGI(TAG, "LAUNCH state triggered");
                 set_enabled(PID, true);
                 set_enabled(TWAI, true);
                 set_blink_pattern(state);
                 break;
 
             case ROCKET_STATE_ABORT:
-                // PID off, IMU off, motor idle
-                printf("ABORT State Triggered\n");
+                // PID off, IMU off, motor idle (+trigger on MQTT disconnect)
+                ESP_LOGI(TAG, "ABORT state triggered");
                 set_enabled(PID, false);
                 set_enabled(TWAI, false);
                 imu_stop();
