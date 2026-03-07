@@ -62,6 +62,7 @@ Once `ABORT` is entered, a hardware reset is required to resume operations.
 | Motor Controller | ODrive (CAN/TWAI, 250 kbps) |
 | Motor | Brushless DC reaction wheel motor |
 | Comms | 802.11 WiFi → MQTT broker |
+> Note: Requires a CAN-capable ODrive controller and a CAN transceiver (e.g. SN65HVD230DRG4) connected to the ESP32 TX/RX pins. Without CAN hardware, the TWAI driver will fail to initialise.
 
 ---
 
