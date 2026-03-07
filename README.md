@@ -82,7 +82,7 @@ Once `ABORT` is entered, a hardware reset is required to resume operations.
 
 ## Installation & Setup
 
-### 1 — ESP-IDF
+### 1. ESP-IDF
 
 Install ESP-IDF v5.x by following the [official guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/). On Linux/macOS:
 
@@ -95,23 +95,23 @@ cd esp-idf
 
 On Windows, use the [ESP-IDF Windows Installer](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/windows-setup.html).
 
-### 2 — MQTT Broker (Mosquitto)
+### 2. MQTT Broker (Mosquitto)
 
 Download and install **Eclipse Mosquitto** from [mosquitto.org](https://mosquitto.org/download/).
 
 On Windows, use the installer from the Eclipse Mosquitto download page. The broker runs on port `1883` by default.
 
-### 3 — MQTT GUI (Optional but Recommended)
+### 3. MQTT GUI (Optional but Recommended)
 
 **[MQTT Explorer](https://mqtt-explorer.com/)** is a lightweight, cross-platform GUI that gives a live tree view of all active topics and their payloads. It's highly recommended for monitoring telemetry and debugging during bench testing. Download it from [mqtt-explorer.com](https://mqtt-explorer.com/).
 
-### 4 — Python Ground Station
+### 4. Python Ground Station
 
 ```bash
 pip install paho-mqtt pandas matplotlib numpy dearpygui
 ```
 
-### 5 — Configure the Firmware
+### 5. Configure the Firmware
 
 Edit `config.h` with your network details and pin assignments:
 
@@ -148,7 +148,7 @@ The MQTT broker IP is set directly in `mqtt.c`:
 .broker.address.uri = "mqtt://YOUR_BROKER_IP:1883",
 ```
 
-### 6 — Build & Flash
+### 6. Build & Flash
 
 ```bash
 # Set target
