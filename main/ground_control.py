@@ -23,6 +23,10 @@ TOPIC_TEL     = "rocket/telemetry"
 TOPIC_PID     = "rocket/pid_set"
 TOPIC_STATE   = "rocket/state"
 TOPIC_DEBUG   = "rocket/debug"
+TOPIC_ODRIVE_BUS  = "rocket/odrive/bus"
+TOPIC_ODRIVE_RPM  = "rocket/odrive/rpm"
+TOPIC_ODRIVE_IQ   = "rocket/odrive/iq"
+TOPIC_ODRIVE_HB   = "rocket/odrive/heartbeat"
 MAX_POINTS    = 2000
 PLOT_WINDOW_S = 20.0
 
@@ -40,9 +44,20 @@ last_hz_time  = time.time()
 current_hz    = 0.0
 current_state = "IDLE"
 plot_paused = False
-t_origin = None 
+last_esp_t = 0.0
+
 last_state_change = 0.0
 STATE_CHANGE_COOLDOWN = 2 #seconds
+
+odrive_vbus  = 0.0
+odrive_ibus  = 0.0
+odrive_rpm   = 0.0
+odrive_iq    = 0.0
+odrive_state = "--"
+odrive_error = "--"
+
+pwr_buf = deque(maxlen=MAX_POINTS)
+pwr_t_buf = deque(maxlen=MAX_POINTS)
 
 # ─── MQTT ─────────────────────────────────────────────────────────────────────
 def on_connect(client, userdata, flags, reason_code, properties):
@@ -50,32 +65,69 @@ def on_connect(client, userdata, flags, reason_code, properties):
     connected = (reason_code == 0)
     client.subscribe(TOPIC_TEL)
     client.subscribe(TOPIC_DEBUG)
+    client.subscribe(TOPIC_ODRIVE_BUS)
+    client.subscribe(TOPIC_ODRIVE_RPM)
+    client.subscribe(TOPIC_ODRIVE_IQ)
+    client.subscribe(TOPIC_ODRIVE_HB)
 
 def on_disconnect(client, userdata, flags, reason_code, properties):
     global connected
     connected = False
 
 def on_message(client, userdata, msg):
-    global msg_count, last_hz_time, current_hz
+    global msg_count, last_hz_time, current_hz, last_esp_t
 
     if msg.topic == TOPIC_DEBUG:
         text = msg.payload.decode(errors="replace").strip()
         append_debug_log(text)
         return
 
+    if msg.topic == TOPIC_ODRIVE_BUS:
+        global odrive_vbus, odrive_ibus
+        d = json.loads(msg.payload.decode())
+        odrive_vbus = d.get("vbus", 0.0)
+        odrive_ibus = d.get("ibus", 0.0)
+        with lock:
+            pwr_buf.append(odrive_vbus * odrive_ibus)
+            pwr_t_buf.append(last_esp_t)   
+        return
+
+    if msg.topic == TOPIC_ODRIVE_RPM:
+        global odrive_rpm
+        d = json.loads(msg.payload.decode())
+        odrive_rpm = d.get("rpm", 0.0)
+        return
+
+    if msg.topic == TOPIC_ODRIVE_IQ:
+        global odrive_iq
+        d = json.loads(msg.payload.decode())
+        odrive_iq = d.get("iq", 0.0)
+        return
+
+    if msg.topic == TOPIC_ODRIVE_HB:
+        global odrive_state, odrive_error
+        d = json.loads(msg.payload.decode())
+        odrive_state = str(d.get("state", "--"))
+        odrive_error = str(d.get("error", "--"))
+        return
+
+    # only telemetry reaches here
     try:
         data = json.loads(msg.payload.decode())
         gz  = data.get("gz",  0.0)
         out = data.get("out", 0.0)
-        t   = data.get("t",   0.0) / 1e6
+        #t   = data.get("t",   0.0) / 1e6
+        t_esp = data.get("t", 0.0) / 1e6
+
+        last_esp_t = t_esp
 
         with lock:
             gz_buf.append(gz)
             out_buf.append(out)
-            t_buf.append(t)
+            t_buf.append(t_esp)          
 
         if recording:
-            record_buffer.append([t, gz, out])
+            record_buffer.append([t_esp, gz, out, odrive_vbus * odrive_ibus, odrive_rpm])
 
         msg_count += 1
         now = time.time()
@@ -92,7 +144,7 @@ def mqtt_connect(host=None):
     global mqtt_client
     if host is None:
         host = BROKER_HOST
-    mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2) # type: ignore
     mqtt_client.on_connect    = on_connect
     mqtt_client.on_disconnect = on_disconnect
     mqtt_client.on_message    = on_message
@@ -182,7 +234,7 @@ def cb_record(sender, app_data):
 
         with open(filename, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["time_s", "gyro_z", "pid_out"])
+            writer.writerow(["time_s", "gyro_z", "pid_out", "power_w", "rpm"])
             writer.writerows(record_buffer)
 
         print(f"Saved {len(record_buffer)} samples to {filename}")
@@ -195,6 +247,8 @@ def cb_pause_plot(sender, app_data):
         dpg.bind_item_theme("pause_btn", btn_themes["ARMED"])
         dpg.set_axis_limits_auto("x_axis") 
         dpg.set_axis_limits_auto("y_axis")
+        dpg.set_axis_limits_auto("pwr_x_axis") 
+        dpg.set_axis_limits_auto("pwr_y_axis")
     else:
         dpg.set_item_label("pause_btn", "Pause Plot")
         dpg.bind_item_theme("pause_btn", btn_themes["IDLE"])
@@ -236,7 +290,7 @@ def make_button_theme(color):
 
 # populated in build_gui() after create_context
 btn_themes         = {}
-btn_theme_inactive = None
+btn_theme_inactive = 0
 
 # ─── GUI build ────────────────────────────────────────────────────────────────
 def build_gui():
@@ -293,8 +347,8 @@ def build_gui():
     dpg.bind_theme(global_theme)
 
     # ── Plot init data ─────────────────────────────────────────────────────────
-    x_init  = list(range(MAX_POINTS))
-    y_zeros = [0.0] * MAX_POINTS
+    #x_init  = list(range(MAX_POINTS))
+    #y_zeros = [0.0] * MAX_POINTS
 
     # ── Viewport ──────────────────────────────────────────────────────────────
     dpg.create_viewport(
@@ -450,31 +504,34 @@ def build_gui():
                 dpg.add_separator()
                 dpg.add_spacer(height=4)
 
-                with dpg.plot(tag="tel_plot", height=-1, width=-1,
-                              anti_aliased=True):
+                with dpg.plot(tag="tel_plot", height=400, width=-1, anti_aliased=True):
                     dpg.add_plot_legend()
-                    dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)",
-                                      tag="x_axis")
-                    with dpg.plot_axis(dpg.mvYAxis, label="Value",
-                                       tag="y_axis"):
-                        dpg.add_line_series(x_init, y_zeros,
-                                            label="Gyro.z (rad/s)",
-                                            tag="gz_series")
-                        dpg.add_line_series(x_init, y_zeros,
-                                            label="PID Output",
-                                            tag="out_series")
+                    dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="x_axis")
+                    with dpg.plot_axis(dpg.mvYAxis, label="Value", tag="y_axis"):
+                        dpg.add_line_series([], [], label="Gyro.z (rad/s)", tag="gz_series")
+                        dpg.add_line_series([], [], label="PID Output", tag="out_series")
 
                     with dpg.theme() as gz_theme:
                         with dpg.theme_component(dpg.mvLineSeries):
-                            dpg.add_theme_color(dpg.mvPlotCol_Line,
-                                                ACCENT, category=dpg.mvThemeCat_Plots)
+                            dpg.add_theme_color(dpg.mvPlotCol_Line, ACCENT, category=dpg.mvThemeCat_Plots)
                     with dpg.theme() as out_theme:
                         with dpg.theme_component(dpg.mvLineSeries):
-                            dpg.add_theme_color(dpg.mvPlotCol_Line,
-                                                ACCENT2, category=dpg.mvThemeCat_Plots)
+                            dpg.add_theme_color(dpg.mvPlotCol_Line, ACCENT2, category=dpg.mvThemeCat_Plots)
 
                     dpg.bind_item_theme("gz_series",  gz_theme)
                     dpg.bind_item_theme("out_series", out_theme)
+
+                dpg.add_spacer(height=4)
+
+                with dpg.plot(tag="pwr_plot", height=200, width=-1, anti_aliased=True):
+                    dpg.add_plot_legend()
+                    dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="pwr_x_axis")
+                    with dpg.plot_axis(dpg.mvYAxis, label="Power (W)", tag="pwr_y_axis"):
+                        dpg.add_line_series([], [], label="Power (W)", tag="pwr_series")
+                    with dpg.theme() as pwr_theme:
+                        with dpg.theme_component(dpg.mvLineSeries):
+                            dpg.add_theme_color(dpg.mvPlotCol_Line, (255, 180, 0, 255), category=dpg.mvThemeCat_Plots)
+                    dpg.bind_item_theme("pwr_series", pwr_theme)
             
             dpg.add_spacer(width=8)
 
@@ -552,6 +609,26 @@ def update_gui():
     # Buttons
     update_buttons()
 
+    # ODrive readouts
+    dpg.set_value("odrive_volt",   f"{odrive_vbus:.2f} V")
+    dpg.set_value("odrive_curr",   f"{odrive_ibus:.3f} A")
+    dpg.set_value("odrive_rpm",    f"{odrive_rpm:.1f} RPM")
+    dpg.set_value("odrive_torque", f"{odrive_iq * 0.036:.3f} Nm")  # Kt = 0.036
+    dpg.set_value("odrive_state",  odrive_state)
+    dpg.set_value("odrive_error",  odrive_error)
+
+    # Power plot
+    with lock:
+        pwr_list  = list(pwr_buf)
+        pwrt_list = list(pwr_t_buf)
+
+    if len(pwr_list) >= 2 and not plot_paused:
+        dpg.set_value("pwr_series", [pwrt_list, pwr_list])
+        t_end   = pwrt_list[-1]
+        t_start = 0.0 if t_end < PLOT_WINDOW_S else t_end - PLOT_WINDOW_S
+        dpg.set_axis_limits("pwr_x_axis", t_start, t_start + PLOT_WINDOW_S)
+        dpg.fit_axis_data("pwr_y_axis")
+    
     # Hz
     dpg.set_value("hz_label", f"{current_hz:.1f} Hz")
 
@@ -576,8 +653,6 @@ def update_gui():
     if len(gz_list) < 2:
         return
 
-    global t_origin
-
     if not plot_paused:
         if t_list:
             x = t_list
@@ -585,11 +660,8 @@ def update_gui():
             dpg.set_value("gz_series",  [x, gz_list])
             dpg.set_value("out_series", [x, out_list])
 
-            if t_origin is None:
-                t_origin = t_list[0]
-
             t_end   = t_list[-1]
-            t_start = t_origin if (t_end - t_origin) < PLOT_WINDOW_S else t_end - PLOT_WINDOW_S
+            t_start = 0.0 if t_end < PLOT_WINDOW_S else t_end - PLOT_WINDOW_S
             dpg.set_axis_limits("x_axis", t_start, t_start + PLOT_WINDOW_S)
             dpg.fit_axis_data("y_axis")
 

@@ -10,6 +10,13 @@
 #define CANTX_PIN 48
 #define CANRX_PIN 47 
 
+#define ODRIVE_MSG(cmd)     ((ODRIVE_NODE_ID << 5) | (cmd))
+#define ODRIVE_HEARTBEAT    ODRIVE_MSG(0x01)
+#define ODRIVE_ENCODER      ODRIVE_MSG(0x09)
+#define ODRIVE_IQ           ODRIVE_MSG(0x14)
+#define ODRIVE_BUS_VI       ODRIVE_MSG(0x17)
+#define ODRIVE_NODE_ID  0  
+
 // SPI
 #define SPI_MOSI_PIN 13
 #define SPI_MISO_PIN 11
