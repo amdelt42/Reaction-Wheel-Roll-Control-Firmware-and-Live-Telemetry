@@ -9,8 +9,16 @@ static int64_t last_pub = 0;
 static float output = 0.0f; 
 static TaskHandle_t imu_task_handle = NULL;
 static volatile bool imu_stop_requested = false;
+
+static float   batch_gz[ACCEL_BATCH_SIZE];
+static float   batch_amag[ACCEL_BATCH_SIZE];
+static float   batch_out[ACCEL_BATCH_SIZE];   
+static int64_t batch_t[ACCEL_BATCH_SIZE];
+static int     batch_idx = 0;
+
 bool pid_enabled  = false;
 bool twai_enabled = false;
+
 QueueHandle_t imu_int_queue = NULL;
 
 void initialize_imu(void){
@@ -48,7 +56,8 @@ void initialize_imu(void){
     // Power Config
     ESP_LOGD(TAG, "Configuring PWR");
     //imu_write(REG_PWR_MGMT0, 0x00); // reset
-    imu_set_bits(REG_PWR_MGMT0, 2, 2, 0b11);     // Gyro ON
+    imu_set_bits(REG_PWR_MGMT0, 2, 2, 0b11);  // Gyro ON
+    imu_set_bits(REG_PWR_MGMT0, 0, 2, 0b11);  // Accel ON
     vTaskDelay(pdMS_TO_TICKS(100));    
 
     // INT config
@@ -126,17 +135,27 @@ esp_err_t imu_write(uint8_t reg, uint8_t data)
     ESP_LOGD(TAG, "Transmitted 0x%02X to 0x%02X", data, reg);
     return ESP_OK;
 }
-esp_err_t imu_read_gyro(gyro_data_t *gyro)
+esp_err_t imu_read_gyro_accel(gyro_data_t *gyro, float *accel_mag)
 {
-    uint8_t buf[6];
-    if (imu_read(REG_GYRO_XOUT_H, buf, 6) != ESP_OK)
+    uint8_t buf[12];
+    if (imu_read(REG_ACCEL_XOUT_H, buf, 12) != ESP_OK)
         return ESP_FAIL;
 
-    int16_t raw_x = (int16_t)((buf[0] << 8) | buf[1]);
-    int16_t raw_y = (int16_t)((buf[2] << 8) | buf[3]);
-    int16_t raw_z = (int16_t)((buf[4] << 8) | buf[5]);
+    // accel 
+    int16_t ax_raw = (int16_t)((buf[0] << 8) | buf[1]);
+    int16_t ay_raw = (int16_t)((buf[2] << 8) | buf[3]);
+    int16_t az_raw = (int16_t)((buf[4] << 8) | buf[5]);
 
-    // convert to rad/s 
+    float ax = ax_raw * ACCEL_SCALE * 9.81f;
+    float ay = ay_raw * ACCEL_SCALE * 9.81f;
+    float az = az_raw * ACCEL_SCALE * 9.81f;
+    *accel_mag = sqrtf(ax*ax + ay*ay + az*az);
+
+    // gyro 
+    int16_t raw_x = (int16_t)((buf[6]  << 8) | buf[7]);
+    int16_t raw_y = (int16_t)((buf[8]  << 8) | buf[9]);
+    int16_t raw_z = (int16_t)((buf[10] << 8) | buf[11]);
+
     gyro->x = raw_x * GYRO_SCALE * DEG_TO_RAD;
     gyro->y = raw_y * GYRO_SCALE * DEG_TO_RAD;
     gyro->z = raw_z * GYRO_SCALE * DEG_TO_RAD;
@@ -206,8 +225,9 @@ void imu_task(void *arg)
             imu_read(REG_INT_STATUS, &status, 1);
 
             gyro_data_t gyro;
-            if (imu_read_gyro(&gyro) != ESP_OK) continue;
-
+            float amag;
+            if (imu_read_gyro_accel(&gyro, &amag) != ESP_OK) continue;
+            
             // debug
             //printf("z:%.2f", gyro.z);
 
@@ -220,7 +240,7 @@ void imu_task(void *arg)
             }
             float dt = (now - last_time) / 1e6f;
             last_time = now;
-
+            
             // pid
             if (s_pid != NULL && pid_enabled)
             {
@@ -229,17 +249,52 @@ void imu_task(void *arg)
                 //printf(" output: %.2f\n", output);
             }
 
-            // publish via mqtt
-            if ((now - last_pub) >= PUB_INTERVAL_US) {
+            // batch — store output per sample
+            batch_gz[batch_idx]   = gyro.z;
+            batch_amag[batch_idx] = amag;
+            batch_out[batch_idx]  = output;   
+            batch_t[batch_idx]    = now;
+            batch_idx++;
+
+            // TWAI
+            if ((now - last_pub) >= PUB_INTERVAL_US) 
+            {
                 last_pub = now;
-                char payload[64];
-                int len = snprintf(payload, sizeof(payload),
-                    "{\"gz\":%.3f,\"out\":%.3f,\"t\":%"PRId64"}",
-                    gyro.z, output, now);
-                mqtt_publish("rocket/telemetry", payload, len);
-                // TWAI
                 if (twai_enabled)
                     send_message(output);
+            }
+
+            // publish via mqtt
+            if (batch_idx >= ACCEL_BATCH_SIZE) 
+            {
+                batch_idx = 0;
+
+                char payload[2048];;
+                int pos = 0;
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "{\"gz\":[");
+                for (int i = 0; i < ACCEL_BATCH_SIZE; i++)
+                    pos += snprintf(payload + pos, sizeof(payload) - pos,
+                        "%.3f%s", batch_gz[i], i < ACCEL_BATCH_SIZE-1 ? "," : "");
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "],\"out\":[");
+                for (int i = 0; i < ACCEL_BATCH_SIZE; i++)
+                    pos += snprintf(payload + pos, sizeof(payload) - pos,
+                        "%.3f%s", batch_out[i], i < ACCEL_BATCH_SIZE-1 ? "," : "");
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "],\"amag\":[");
+                for (int i = 0; i < ACCEL_BATCH_SIZE; i++)
+                    pos += snprintf(payload + pos, sizeof(payload) - pos,
+                        "%.3f%s", batch_amag[i], i < ACCEL_BATCH_SIZE-1 ? "," : "");
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "],\"t\":[");
+                for (int i = 0; i < ACCEL_BATCH_SIZE; i++)
+                    pos += snprintf(payload + pos, sizeof(payload) - pos,
+                        "%"PRId64"%s", batch_t[i], i < ACCEL_BATCH_SIZE-1 ? "," : "");
+                pos += snprintf(payload + pos, sizeof(payload) - pos, "]}");
+
+                if (pos >= (int)sizeof(payload)) 
+                {
+                    ESP_LOGE(TAG, "Payload buffer overflow! pos=%d", pos);
+                } else {
+                    mqtt_publish("rocket/telemetry", payload, pos);
+                }
             }
         }
     }

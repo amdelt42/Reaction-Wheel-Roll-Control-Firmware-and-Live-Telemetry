@@ -6,6 +6,7 @@
 #include <driver/gpio.h>
 #include "esp_timer.h"
 #include <inttypes.h>
+#include <math.h>
 
 typedef struct {
     float x;
@@ -20,7 +21,7 @@ extern QueueHandle_t imu_int_queue;
 //WRITE, READ
 esp_err_t imu_read(uint8_t reg, uint8_t *data, size_t len);
 esp_err_t imu_write(uint8_t reg, uint8_t data);
-esp_err_t imu_read_gyro(gyro_data_t *gyro);
+esp_err_t imu_read_gyro_accel(gyro_data_t *gyro, float *accel_mag);
 void imu_set_bits(uint8_t reg, uint8_t start_bit, uint8_t width, uint8_t value);
 
 //INT, CLKIN

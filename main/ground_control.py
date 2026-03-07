@@ -12,6 +12,7 @@ from collections import deque
 
 import paho.mqtt.client as mqtt
 import dearpygui.dearpygui as dpg
+import numpy as np
 
 recording = False
 record_buffer = []
@@ -27,15 +28,26 @@ TOPIC_ODRIVE_BUS  = "rocket/odrive/bus"
 TOPIC_ODRIVE_RPM  = "rocket/odrive/rpm"
 TOPIC_ODRIVE_IQ   = "rocket/odrive/iq"
 TOPIC_ODRIVE_HB   = "rocket/odrive/heartbeat"
-MAX_POINTS    = 2000
-PLOT_WINDOW_S = 20.0
+MAX_POINTS    = 30000
+PLOT_WINDOW_S = 30.0
 
 # ─── State ────────────────────────────────────────────────────────────────────
 gz_buf    = deque(maxlen=MAX_POINTS)
 out_buf   = deque(maxlen=MAX_POINTS)
 t_buf     = deque(maxlen=MAX_POINTS)
+amag_buf    = deque(maxlen=MAX_POINTS)
 debug_lines = deque(maxlen=200)
+debug_queue = deque(maxlen=200)
 lock      = threading.Lock()
+
+FFT_FRAME_SIZE = 5000   # 5 seconds at 1kHz
+fft_frame = []
+fft_frame_t = []
+fft_frame_ready = False
+fft_frame_display = []   
+fft_frame_display_t = []
+fft_record_buffer = []
+max_amag_rms = 0.0
 
 mqtt_client   = None
 connected     = False
@@ -44,10 +56,12 @@ last_hz_time  = time.time()
 current_hz    = 0.0
 current_state = "IDLE"
 plot_paused = False
-last_esp_t = 0.0
 
+last_esp_t = 0.0
 last_state_change = 0.0
 STATE_CHANGE_COOLDOWN = 2 #seconds
+fft_last_t  = 0.0
+FFT_INTERVAL = 0.5 # seconds between FFT recompute
 
 odrive_vbus  = 0.0
 odrive_ibus  = 0.0
@@ -75,7 +89,7 @@ def on_disconnect(client, userdata, flags, reason_code, properties):
     connected = False
 
 def on_message(client, userdata, msg):
-    global msg_count, last_hz_time, current_hz, last_esp_t
+    global msg_count, last_hz_time, current_hz, last_esp_t, fft_frame_ready
 
     if msg.topic == TOPIC_DEBUG:
         text = msg.payload.decode(errors="replace").strip()
@@ -114,20 +128,32 @@ def on_message(client, userdata, msg):
     # only telemetry reaches here
     try:
         data = json.loads(msg.payload.decode())
-        gz  = data.get("gz",  0.0)
-        out = data.get("out", 0.0)
-        #t   = data.get("t",   0.0) / 1e6
-        t_esp = data.get("t", 0.0) / 1e6
+        gz_samples   = data.get("gz",   [0.0])
+        out_samples  = data.get("out",  [0.0])
+        amag_samples = data.get("amag", [0.0])
+        t_samples    = [t / 1e6 for t in data.get("t", [0.0])]
 
-        last_esp_t = t_esp
+        last_esp_t = t_samples[-1]
 
         with lock:
-            gz_buf.append(gz)
-            out_buf.append(out)
-            t_buf.append(t_esp)          
+            for gz, out, amag, t_esp in zip(gz_samples, out_samples, amag_samples, t_samples):
+                gz_buf.append(gz)
+                out_buf.append(out)
+                t_buf.append(t_esp)
+                amag_buf.append(amag)
+
+                fft_frame.append(amag)
+                fft_frame_t.append(t_esp)
+                if len(fft_frame) >= FFT_FRAME_SIZE:
+                    fft_frame_display[:] = fft_frame[:]
+                    fft_frame_display_t[:] = fft_frame_t[:]
+                    fft_frame.clear()
+                    fft_frame_t.clear()
+                    fft_frame_ready = True  
 
         if recording:
-            record_buffer.append([t_esp, gz, out, odrive_vbus * odrive_ibus, odrive_rpm])
+             for gz, out, amag, t_esp in zip(gz_samples, out_samples, amag_samples, t_samples):
+                record_buffer.append([t_esp, gz, out, odrive_vbus * odrive_ibus, odrive_rpm, amag])
 
         msg_count += 1
         now = time.time()
@@ -137,8 +163,8 @@ def on_message(client, userdata, msg):
             msg_count    = 0
             last_hz_time = now
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"on_message error: {e}")
 
 def mqtt_connect(host=None):
     global mqtt_client
@@ -178,8 +204,20 @@ def update_buttons():
     dpg.configure_item("btn_launch", enabled=s["launch"])
 
 def append_debug_log(text):
-    debug_lines.append(text)
-    dpg.set_value("debug_log", "\n".join(debug_lines))
+    debug_queue.append(text)
+
+def compute_psd(amag_list, t_list): 
+    if len(amag_list) < 64 or len(t_list) < 2:
+        return [], []
+    dt = (t_list[-1] - t_list[0]) / (len(t_list) - 1)
+    fs = 1.0 / dt if dt > 0 else 100.0
+    data = np.array(amag_list, dtype=np.float32)
+    data -= np.mean(data)                          # remove DC / gravity
+    window = np.hanning(len(data))
+    fft_mag = np.abs(np.fft.rfft(data * window))
+    psd = (fft_mag ** 2) / (fs * np.sum(window ** 2))
+    freqs = np.fft.rfftfreq(len(data), d=1.0 / fs)
+    return freqs.tolist(), psd.tolist()
 
 # ─── Callbacks ────────────────────────────────────────────────────────────────
 def cb_send_pid(sender, app_data):
@@ -231,13 +269,16 @@ def cb_record(sender, app_data):
         dpg.bind_item_theme("rec_btn", "green_button")
 
         filename = f"telemetry_{int(time.time())}.csv"
-
         with open(filename, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["time_s", "gyro_z", "pid_out", "power_w", "rpm"])
+            writer.writerow(["time_s", "gyro_z", "pid_out", "power_w", "rpm", "amag"])
             writer.writerows(record_buffer)
-
         print(f"Saved {len(record_buffer)} samples to {filename}")
+
+        fft_filename = f"fft_{int(time.time())}.json"
+        with open(fft_filename, "w") as f:
+            json.dump(fft_record_buffer, f)
+        print(f"Saved {len(fft_record_buffer)} FFT frames to {fft_filename}")
 
 def cb_pause_plot(sender, app_data):
     global plot_paused
@@ -249,6 +290,11 @@ def cb_pause_plot(sender, app_data):
         dpg.set_axis_limits_auto("y_axis")
         dpg.set_axis_limits_auto("pwr_x_axis") 
         dpg.set_axis_limits_auto("pwr_y_axis")
+        dpg.set_axis_limits_auto("fft_x_axis")
+        dpg.set_axis_limits_auto("fft_y_axis")
+        dpg.set_axis_limits_auto("amag_x_axis")
+        dpg.set_axis_limits_auto("amag_y_axis")
+        
     else:
         dpg.set_item_label("pause_btn", "Pause Plot")
         dpg.bind_item_theme("pause_btn", btn_themes["IDLE"])
@@ -353,8 +399,8 @@ def build_gui():
     # ── Viewport ──────────────────────────────────────────────────────────────
     dpg.create_viewport(
         title="Reaction Wheel Ground Control",
-        width=1280, height=780,
-        min_width=1280, min_height=780
+        width=1280, height=920,
+        min_width=1280, min_height=920
     )
 
     with dpg.window(tag="main_win",
@@ -378,6 +424,8 @@ def build_gui():
             dpg.add_text("IDLE",   tag="state_label", color=DIM)
             dpg.add_spacer(width=20)
             dpg.add_button(label="Pause Plot", tag="pause_btn", callback=cb_pause_plot)
+            dpg.add_spacer(width=20)
+            dpg.add_button(label="Clear Min/Max", tag="clear_btn", callback=cb_pause_plot)
             dpg.add_spacer(width=20)
             dpg.add_text("CMD:", color=TEXT_DIM)
             dpg.add_text("", tag="cooldown_label", color=TEXT_DIM)
@@ -495,6 +543,12 @@ def build_gui():
                     with dpg.table_row():
                         dpg.add_text("PID Out Min", color=TEXT_DIM)
                         dpg.add_text("0.0000", tag="min_out")
+                    with dpg.table_row():
+                        dpg.add_text("Accel RMS", color=TEXT_DIM)
+                        dpg.add_text("0.0000 g", tag="live_amag_rms")
+                    with dpg.table_row():
+                        dpg.add_text("Accel RMS Max", color=TEXT_DIM)
+                        dpg.add_text("0.0000 g", tag="max_amag_rms")
                     
             dpg.add_spacer(width=8)
 
@@ -504,35 +558,60 @@ def build_gui():
                 dpg.add_separator()
                 dpg.add_spacer(height=4)
 
-                with dpg.plot(tag="tel_plot", height=400, width=-1, anti_aliased=True):
+                # Telemtry
+                with dpg.plot(tag="tel_plot", height=350, width=-1, anti_aliased=True):
                     dpg.add_plot_legend()
                     dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="x_axis")
                     with dpg.plot_axis(dpg.mvYAxis, label="Value", tag="y_axis"):
                         dpg.add_line_series([], [], label="Gyro.z (rad/s)", tag="gz_series")
                         dpg.add_line_series([], [], label="PID Output", tag="out_series")
-
                     with dpg.theme() as gz_theme:
                         with dpg.theme_component(dpg.mvLineSeries):
                             dpg.add_theme_color(dpg.mvPlotCol_Line, ACCENT, category=dpg.mvThemeCat_Plots)
                     with dpg.theme() as out_theme:
                         with dpg.theme_component(dpg.mvLineSeries):
                             dpg.add_theme_color(dpg.mvPlotCol_Line, ACCENT2, category=dpg.mvThemeCat_Plots)
-
                     dpg.bind_item_theme("gz_series",  gz_theme)
                     dpg.bind_item_theme("out_series", out_theme)
-
                 dpg.add_spacer(height=4)
 
-                with dpg.plot(tag="pwr_plot", height=200, width=-1, anti_aliased=True):
+                # Power
+                with dpg.plot(tag="pwr_plot", height=140, width=-1, anti_aliased=True):
                     dpg.add_plot_legend()
                     dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="pwr_x_axis")
-                    with dpg.plot_axis(dpg.mvYAxis, label="Power (W)", tag="pwr_y_axis"):
+                    with dpg.plot_axis(dpg.mvYAxis, label="Value", tag="pwr_y_axis"):
                         dpg.add_line_series([], [], label="Power (W)", tag="pwr_series")
                     with dpg.theme() as pwr_theme:
                         with dpg.theme_component(dpg.mvLineSeries):
                             dpg.add_theme_color(dpg.mvPlotCol_Line, (255, 180, 0, 255), category=dpg.mvThemeCat_Plots)
                     dpg.bind_item_theme("pwr_series", pwr_theme)
-            
+                dpg.add_spacer(height=4)
+
+                # AMAG
+                with dpg.plot(tag="amag_plot", height=140, width=-1, anti_aliased=True):
+                    dpg.add_plot_legend()
+                    dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="amag_x_axis")
+                    with dpg.plot_axis(dpg.mvYAxis, label="Value", tag="amag_y_axis"):
+                        dpg.add_line_series([], [], label="Accel Mag (m/s²)", tag="amag_series")
+                    with dpg.theme() as amag_theme:
+                        with dpg.theme_component(dpg.mvLineSeries):
+                            dpg.add_theme_color(dpg.mvPlotCol_Line,
+                                                (100, 180, 255, 255), category=dpg.mvThemeCat_Plots)
+                    dpg.bind_item_theme("amag_series", amag_theme)
+                dpg.add_spacer(height=4)
+
+                # FFT
+                with dpg.plot(tag="fft_plot", height=250, width=-1, anti_aliased=True):
+                    dpg.add_plot_legend()
+                    dpg.add_plot_axis(dpg.mvXAxis, label="Frequency (Hz)", tag="fft_x_axis")
+                    with dpg.plot_axis(dpg.mvYAxis, label="Value ", tag="fft_y_axis"):
+                        dpg.add_line_series([], [], label="Accel PSD (m²/s⁴/Hz)", tag="fft_series")
+                    with dpg.theme() as fft_theme:
+                        with dpg.theme_component(dpg.mvLineSeries):
+                            dpg.add_theme_color(dpg.mvPlotCol_Line,
+                                                (180, 100, 255, 255), category=dpg.mvThemeCat_Plots)
+                    dpg.bind_item_theme("fft_series", fft_theme)
+
             dpg.add_spacer(width=8)
 
             # ── Right panel ────────────────────────────────────────────────────
@@ -584,6 +663,11 @@ def build_gui():
 
 # ─── Update loop ──────────────────────────────────────────────────────────────
 def update_gui():
+    #debug
+    while debug_queue:
+        debug_lines.append(debug_queue.popleft())
+        dpg.set_value("debug_log", "\n".join(debug_lines))
+
     # Connection indicator
     if connected:
         dpg.configure_item("conn_dot",   color=ACCENT)
@@ -644,11 +728,12 @@ def update_gui():
         else:
             dpg.bind_item_theme(tag, btn_theme_inactive)
 
-    # Plot
+    # TELEMETRY
     with lock:
         gz_list  = list(gz_buf)
         out_list = list(out_buf)
         t_list   = list(t_buf)
+        amag_list = list(amag_buf)
 
     if len(gz_list) < 2:
         return
@@ -657,6 +742,7 @@ def update_gui():
         if t_list:
             x = t_list
 
+            dpg.set_value("amag_series", [t_list, amag_list])
             dpg.set_value("gz_series",  [x, gz_list])
             dpg.set_value("out_series", [x, out_list])
 
@@ -664,6 +750,38 @@ def update_gui():
             t_start = 0.0 if t_end < PLOT_WINDOW_S else t_end - PLOT_WINDOW_S
             dpg.set_axis_limits("x_axis", t_start, t_start + PLOT_WINDOW_S)
             dpg.fit_axis_data("y_axis")
+            dpg.set_axis_limits("amag_x_axis", t_start, t_start + PLOT_WINDOW_S) 
+            dpg.fit_axis_data("amag_y_axis")  
+
+    # FFT
+    global fft_frame_ready
+    if not plot_paused and fft_frame_ready:
+        fft_frame_ready = False
+        with lock:
+            amag_snap = list(fft_frame_display)
+            t_snap    = list(fft_frame_display_t)
+
+        freqs, psd = compute_psd(amag_snap, t_snap)
+        if freqs:
+            dpg.set_value("fft_series", [freqs, psd])
+            dpg.set_axis_limits("fft_x_axis", 0.0, 250.0)
+            dpg.fit_axis_data("fft_y_axis")
+
+        global max_amag_rms
+        ac = np.array(amag_snap) - np.mean(amag_snap)
+        rms_g = float(np.sqrt(np.mean(ac ** 2))) / 9.81
+        if rms_g > max_amag_rms:
+            max_amag_rms = rms_g
+        dpg.set_value("live_amag_rms", f"{rms_g:.4f} g")
+        dpg.set_value("max_amag_rms",  f"{max_amag_rms:.4f} g")
+
+        if recording and freqs:
+            fft_record_buffer.append({
+                "t": t_snap[-1],
+                "rms_g": rms_g,
+                "freqs": freqs,
+                "psd": psd
+            })
 
     # Live readouts
     if gz_list:
@@ -673,6 +791,7 @@ def update_gui():
         dpg.set_value("live_out", f"{out_list[-1]:.4f}")
         dpg.set_value("max_out",  f"{max(out_list):.4f}")
         dpg.set_value("min_out",  f"{min(out_list):.4f}")
+        
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":

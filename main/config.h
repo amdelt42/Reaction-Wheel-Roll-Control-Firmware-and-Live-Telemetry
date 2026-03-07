@@ -39,6 +39,13 @@
 #define REG_INT_SOURCE0 0x65
 #define REG_INT_STATUS 0x2D
 
+#define REG_ACCEL_XOUT_H 0x1F
+#define REG_ACCEL_XOUT_L 0x20
+#define REG_ACCEL_YOUT_H 0x21
+#define REG_ACCEL_YOUT_L 0x22
+#define REG_ACCEL_ZOUT_H 0x23
+#define REG_ACCEL_ZOUT_L 0x24
+
 #define REG_GYRO_XOUT_H 0x25
 #define REG_GYRO_XOUT_L 0x26
 #define REG_GYRO_YOUT_H 0x27
@@ -47,8 +54,10 @@
 #define REG_GYRO_ZOUT_L 0x2A
 
 #define GYRO_SCALE (1.0f / 16.4f) // LSB/dps for ±2000 dps
+#define ACCEL_SCALE (1.0f / 1024.0f) // ±32g default
 #define DEG_TO_RAD (3.14159265359f / 180.0f)
 #define IMU_MAX_READ_LEN 16
+#define ACCEL_BATCH_SIZE 50
 
 // PID
 #define PID_KP ((float)1.0)
