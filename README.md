@@ -1,4 +1,4 @@
-# Reaction Wheel PCB Firmware and Live Telemetry
+# Reaction-Wheel-Roll-Control-Firmware-and-Live-Telemetry
 
 Embedded firmware for a reaction wheel–based roll stabilization system, designed for a high-power rocket. Built on an **ESP32** running **FreeRTOS**, the system reads angular rate from an ICM-4xxxx series IMU over SPI, runs a PID controller to compute a correction torque, and drives a brushless motor via an ODrive motor controller over CAN (TWAI). Flight state and PID tuning are managed remotely over **WiFi + MQTT**.
 
