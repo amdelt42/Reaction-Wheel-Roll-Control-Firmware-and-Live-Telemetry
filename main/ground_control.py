@@ -36,6 +36,8 @@ gz_buf    = deque(maxlen=MAX_POINTS)
 out_buf   = deque(maxlen=MAX_POINTS)
 t_buf     = deque(maxlen=MAX_POINTS)
 amag_buf    = deque(maxlen=MAX_POINTS)
+rpm_buf   = deque(maxlen=MAX_POINTS)
+rpm_t_buf = deque(maxlen=MAX_POINTS)
 debug_lines = deque(maxlen=200)
 debug_queue = deque(maxlen=200)
 lock      = threading.Lock()
@@ -110,6 +112,9 @@ def on_message(client, userdata, msg):
         global odrive_rpm
         d = json.loads(msg.payload.decode())
         odrive_rpm = d.get("rpm", 0.0)
+        with lock:
+            rpm_buf.append(odrive_rpm)
+            rpm_t_buf.append(last_esp_t)
         return
 
     if msg.topic == TOPIC_ODRIVE_IQ:
@@ -294,6 +299,8 @@ def cb_pause_plot(sender, app_data):
         dpg.set_axis_limits_auto("fft_y_axis")
         dpg.set_axis_limits_auto("amag_x_axis")
         dpg.set_axis_limits_auto("amag_y_axis")
+        dpg.set_axis_limits_auto("rpm_x_axis")
+        dpg.set_axis_limits_auto("rpm_y_axis")
         
     else:
         dpg.set_item_label("pause_btn", "Pause Plot")
@@ -574,16 +581,29 @@ def build_gui():
                 dpg.add_spacer(height=4)
 
                 # Power
-                with dpg.plot(tag="pwr_plot", height=140, width=-1, anti_aliased=True):
-                    dpg.add_plot_legend()
-                    dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="pwr_x_axis")
-                    with dpg.plot_axis(dpg.mvYAxis, label="Value", tag="pwr_y_axis"):
-                        dpg.add_line_series([], [], label="Power (W)", tag="pwr_series")
-                    with dpg.theme() as pwr_theme:
-                        with dpg.theme_component(dpg.mvLineSeries):
-                            dpg.add_theme_color(dpg.mvPlotCol_Line, (255, 180, 0, 255), category=dpg.mvThemeCat_Plots)
-                    dpg.bind_item_theme("pwr_series", pwr_theme)
-                dpg.add_spacer(height=4)
+                with dpg.table(header_row=False, borders_innerV=False, borders_outerV=False):
+                    dpg.add_table_column()
+                    dpg.add_table_column()
+                    with dpg.table_row():
+                        with dpg.plot(tag="pwr_plot", height=140, width=-1, anti_aliased=True):
+                            dpg.add_plot_legend()
+                            dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="pwr_x_axis")
+                            with dpg.plot_axis(dpg.mvYAxis, label="Value", tag="pwr_y_axis"):
+                                dpg.add_line_series([], [], label="Power (W)", tag="pwr_series")
+                            with dpg.theme() as pwr_theme:
+                                with dpg.theme_component(dpg.mvLineSeries):
+                                    dpg.add_theme_color(dpg.mvPlotCol_Line, (255, 180, 0, 255), category=dpg.mvThemeCat_Plots)
+                            dpg.bind_item_theme("pwr_series", pwr_theme)
+
+                        with dpg.plot(tag="rpm_plot", height=140, width=-1, anti_aliased=True):
+                            dpg.add_plot_legend()
+                            dpg.add_plot_axis(dpg.mvXAxis, label="Time (s)", tag="rpm_x_axis")
+                            with dpg.plot_axis(dpg.mvYAxis, label="Value", tag="rpm_y_axis"):
+                                dpg.add_line_series([], [], label="RPM", tag="rpm_series")
+                            with dpg.theme() as rpm_theme:
+                                with dpg.theme_component(dpg.mvLineSeries):
+                                    dpg.add_theme_color(dpg.mvPlotCol_Line, (180, 100, 255, 255), category=dpg.mvThemeCat_Plots)
+                            dpg.bind_item_theme("rpm_series", rpm_theme)
 
                 # AMAG
                 with dpg.plot(tag="amag_plot", height=140, width=-1, anti_aliased=True):
@@ -710,6 +730,18 @@ def update_gui():
         t_start = 0.0 if t_end < PLOT_WINDOW_S else t_end - PLOT_WINDOW_S
         dpg.set_axis_limits("pwr_x_axis", t_start, t_start + PLOT_WINDOW_S)
         dpg.fit_axis_data("pwr_y_axis")
+
+    # RPM
+    with lock:
+        rpm_list  = list(rpm_buf)
+        rpmt_list = list(rpm_t_buf)
+
+    if len(rpm_list) >= 2 and not plot_paused:
+        dpg.set_value("rpm_series", [rpmt_list, rpm_list])
+        t_end   = rpmt_list[-1]
+        t_start = 0.0 if t_end < PLOT_WINDOW_S else t_end - PLOT_WINDOW_S
+        dpg.set_axis_limits("rpm_x_axis", t_start, t_start + PLOT_WINDOW_S)
+        dpg.fit_axis_data("rpm_y_axis")
     
     # Hz
     dpg.set_value("hz_label", f"{current_hz:.1f} Hz")

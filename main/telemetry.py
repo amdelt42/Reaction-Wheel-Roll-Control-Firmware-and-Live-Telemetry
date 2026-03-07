@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 df = pd.read_csv("telemetry_1772855272.csv")
 # columns: time_s, gyro_z, pid_out, power_w, rpm, amag
 
-fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
+fig, axes = plt.subplots(5, 1, figsize=(12, 12), sharex=True)
 
 axes[0].plot(df['time_s'], df['gyro_z'], color='#00d296')
 axes[0].set_ylabel("Gyro Z (rad/s)")
@@ -22,6 +22,11 @@ axes[3].plot(df['time_s'], df['power_w'], color='#ffb400')
 axes[3].set_ylabel("Power (W)")
 axes[3].set_xlabel("Time (s)")
 axes[3].grid(True, alpha=0.3)
+
+axes[4].plot(df['time_s'], df['rpm'], color='#b464ff')
+axes[4].set_ylabel("RPM")
+axes[4].set_xlabel("Time (s)")
+axes[4].grid(True, alpha=0.3)
 
 plt.suptitle("Reaction Wheel Telemetry")
 plt.tight_layout()
