@@ -33,26 +33,6 @@ Once `ABORT` is entered, a hardware reset is required to resume operations.
 
 ---
 
-## Repository Structure
-
-```
-├── main.c            # Entry point — driver init, FreeRTOS task launch
-├── imu.c/h           # ICM IMU driver — SPI read/write, interrupt task, telemetry batching
-├── pid.c/h           # PID controller — compute, reset, anti-windup
-├── twai.c/h          # CAN bus driver — ODrive command TX, telemetry RX
-├── statemachine.c/h  # Flight state machine — state transitions, subsystem enable/disable
-├── mqtt.c/h          # MQTT client — publish telemetry, subscribe to commands
-├── wifi.c/h          # WiFi station init and reconnect logic
-├── spi.c/h           # SPI bus init (shared by IMU)
-├── blink.c/h         # LED status patterns per flight state
-├── config.h          # Pin definitions, PID defaults, timing constants
-├── ground_control.py # MQTT ground station — command sender & telemetry logger
-├── telemetry.py      # Post-flight telemetry plotter (gyro, PID, RPM, power)
-└── fft.py            # Vibration analysis — FFT frames + RMS-over-time plots
-```
-
----
-
 ## Hardware
 
 | Component | Details |
@@ -85,22 +65,11 @@ Once `ABORT` is entered, a hardware reset is required to resume operations.
 
 ### 1. ESP-IDF
 
-Install ESP-IDF v5.x by following the [official guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/). On Linux/macOS:
-
-```bash
-git clone --recursive https://github.com/espressif/esp-idf.git
-cd esp-idf
-./install.sh esp32
-. ./export.sh
-```
-
-On Windows, use the [ESP-IDF Windows Installer](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/windows-setup.html).
+Install ESP-IDF v5.x by following the [official guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/).
 
 ### 2. MQTT Broker (Mosquitto)
 
-Download and install **Eclipse Mosquitto** from [mosquitto.org](https://mosquitto.org/download/).
-
-On Windows, use the installer from the Eclipse Mosquitto download page. The broker runs on port `1883` by default.
+Download and install **Eclipse Mosquitto** from [mosquitto.org](https://mosquitto.org/download/). The broker runs on port `1883` by default.
 
 ### 3. MQTT GUI (Optional but Recommended)
 
